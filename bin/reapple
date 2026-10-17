@@ -1,0 +1,260 @@
+#!/bin/bash
+# reapple -- Apple Music's Now Playing page, rebuilt inside NetEase Cloud Music.
+#
+# One entry point for everything a person needs to do to it:
+#
+#   reapple on | off | status | config | logs | reset | uninstall
+#
+# `on` and `off` are deliberately reversible without a logout and without touching the NetEase app
+# bundle, because `off` has to work even when the thing is misbehaving -- that is the moment you most
+# need to be able to turn it off.
+set -u
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+HOME_DIR="${REAPPLE_HOME:-$HOME/.reapple}"
+LABEL="com.reapple.music"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+CONFIG="$HOME_DIR/config.json"
+PAYLOAD="$HOME_DIR/stage.js"
+DISABLED="$HOME_DIR/disabled"
+LOG="${REAPPLE_LOG:-/tmp/reapple.log}"
+NODE="$(command -v node || echo /opt/homebrew/bin/node)"
+PORT="${REAPPLE_PORT:-9333}"
+
+bold() { printf '\033[1m%s\033[0m\n' "$1"; }
+dim()  { printf '\033[2m%s\033[0m\n' "$1"; }
+say()  { printf '%s\n' "$1"; }
+die()  { printf 'reapple: %s\n' "$1" >&2; exit 1; }
+
+bootstrap() {
+  [ -d "$HOME_DIR" ] || mkdir -p "$HOME_DIR"
+  [ -f "$CONFIG" ] || cp "$REPO/config/config.json" "$CONFIG"
+  # The payload is refreshed on every install/update, but never silently on every run: if a local
+  # edit is what someone is debugging, overwriting it on a timer would make the fault unreproducible.
+  if [ ! -f "$PAYLOAD" ]; then cp "$REPO/payload/stage.js" "$PAYLOAD"; fi
+}
+
+agent_loaded() { launchctl list 2>/dev/null | grep -q "$LABEL"; }
+
+load_agent() {
+  bootstrap
+  sed -e "s|__LABEL__|$LABEL|g" \
+      -e "s|__WATCH__|$REPO/agent/watch.sh|g" \
+      "$REPO/agent/$LABEL.plist" >"$PLIST"
+  chmod +x "$REPO/agent/watch.sh"
+  # Unload first so a plist that moved or changed does not leave the old one running as well.
+  launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
+}
+
+unload_agent() {
+  launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
+}
+
+ensure_port() {
+  # NetEase drops its command line on every launch, so the debug port has to be re-asserted. The
+  # watch script does the same thing; this is the synchronous version for when the user just wants it
+  # to work now rather than in twenty seconds.
+  local pid
+  pid="$(pgrep -x NeteaseMusic | head -1 || true)"
+  [ -z "$pid" ] && return 0
+  [[ "$(ps -ww -p "$pid" -o args= || true)" == *"--remote-debugging-port=$PORT"* ]] && return 0
+  bold "restarting NetEase with the debug port"
+  say "  (this happens once; NetEase forgets the flag on every launch)"
+  osascript -e 'tell application "NeteaseMusic" to quit' >/dev/null 2>&1 || true
+  sleep 1.5
+  pgrep -x NeteaseMusic >/dev/null && kill -9 "$(pgrep -x NeteaseMusic | head -1)" 2>/dev/null
+  open -a "${REAPPLE_APP:-/Applications/NeteaseMusic.app}" --args \
+    "--remote-debugging-port=$PORT" "--remote-allow-origins=*"
+  sleep 3
+}
+
+payload_version() {
+  [ -f "$PAYLOAD" ] || return 1
+  grep -o 'STAGE_VERSION = "[^"]*"' "$PAYLOAD" | head -1 | cut -d'"' -f2
+}
+
+inject_now() {
+  [ -f "$HOME_DIR/stage.js" ] || return 0
+  REAPPLE_HOME="$HOME_DIR" REAPPLE_PORT="$PORT" "$NODE" "$REPO/agent/inject.mjs" 2>&1 | tail -3
+}
+
+# `reapple config` with no key prints; with one key it toggles or sets; with two it sets exactly.
+cmd_config() {
+  bootstrap
+  case "${1:-}" in
+    ""|--help)
+      bold "reapple switches  ($CONFIG)"
+      say ""
+      # Print the file with the comment lines stripped so what the user sees is what the machine
+      # reads, and the underscore key is explained rather than listed as an unknown switch.
+      node -e '
+        const fs=require("fs"),p=process.argv[1],c=JSON.parse(fs.readFileSync(p,"utf8"));
+        const notes={
+          playPage:"master switch -- off hands the whole page back to NetEase",
+          backdrop:"the sampled-and-graded album colour wash",
+          artwork:"the floating artwork card and its play/pause animation",
+          songInfo:"title / artist / album",
+          playbackBar:"elapsed, remaining, scrubber",
+          lyrics:"the synced lyric list and its scroll algorithm",
+          footer:"the two liquid-glass buttons, bottom right",
+          queue:"the queue sheet the right-hand button opens",
+          miniBar:"reserved for the floating mini-bar capsule; not built yet"
+        };
+        for(const k of Object.keys(notes)){
+          if(!k.startsWith("_")) say_note(k,c[k],notes[k]);
+        }
+        function say_note(k,v,n){
+          process.stdout.write("  "+(v?"on ":"off")+"  "+k.padEnd(12)+n+"\n");
+        }
+      ' "$CONFIG"
+      say ""
+      dim "  reapple config lyrics off      turn one component off"
+      dim "  reapple config lyrics on       turn it back on"
+      dim "  reapple config lyrics false   set it explicitly"
+      say ""
+      ;;
+    *)
+      local key="$1" want="${2:-toggle}"
+      node -e '
+        const fs=require("fs"),p=process.argv[1],k=process.argv[2],w=process.argv[3];
+        let c={}; try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
+        if(k.startsWith("_")){console.error("reapple: "+k+" is a comment, not a switch");process.exit(1)}
+        const known=["playPage","backdrop","artwork","songInfo","playbackBar","lyrics","footer","queue","miniBar"];
+        if(!known.includes(k)){console.error("reapple: unknown switch "+k+"\n  known: "+known.join(", "));process.exit(1)}
+        const before=c[k];
+        c[k] = w==="toggle" ? !before
+             : w==="on"||w==="true"||w==="1" ? true
+             : w==="off"||w==="false"||w==="0" ? false
+             : (console.error("reapple: want on/off/true/false, got "+w), process.exit(1));
+        for(const key of Object.keys(c)) if(key.startsWith("_")) delete c[key];
+        fs.writeFileSync(p, JSON.stringify(c,null,2)+"\n");
+        console.log("  "+k+": "+String(before)+" -> "+String(c[k]));
+      ' "$CONFIG" "$key" "$want" || exit 1
+      if agent_loaded; then inject_now >/dev/null; say "  applied"; fi
+      ;;
+  esac
+}
+
+case "${1:-status}" in
+  on)
+    bold "reapple on"
+    bootstrap
+    rm -f "$DISABLED"
+    load_agent
+    ensure_port
+    inject_now
+    say ""
+    say "  switches: $CONFIG"
+    say "  off with: reapple off"
+    ;;
+
+  off)
+    bold "reapple off"
+    unload_agent
+    # The marker file is what stops the watch script relaunching NetEase with a debug port the user
+    # did not ask for. Removing it is the whole of "off"; the port flag survives in the running app
+    # until the next manual relaunch, which is harmless and avoids killing the user's playback.
+    touch "$DISABLED"
+    # Detach the payload from the page that is up right now, so the switch is immediate rather than
+    # "effective after the next reload".
+    if [ -x "$NODE" ] && curl -sf -m 1 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; then
+      "$NODE" -e '
+        const port=process.argv[1];
+        (async()=>{
+          const t=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+          for(const p of t.filter(x=>x.type==="page"&&x.webSocketDebuggerUrl)){
+            const ws=new WebSocket(p.webSocketDebuggerUrl);
+            await new Promise(r=>ws.addEventListener("open",r,{once:true}));
+            ws.send(JSON.stringify({id:1,method:"Runtime.evaluate",
+              params:{expression:"window.__kabiStageDispose && window.__kabiStageDispose()",returnByValue:true}}));
+            await new Promise(r=>setTimeout(r,400));
+            ws.close();
+          }
+        })().catch(()=>{});
+      ' "$PORT" 2>/dev/null || true
+    fi
+    say "  detached; NetEase left running"
+    ;;
+
+  status)
+    bold "reapple"
+    local_v="$(payload_version 2>/dev/null || echo 'not installed')"
+    say "  payload    $local_v"
+    if agent_loaded; then say "  agent      loaded"; else say "  agent      not loaded"; fi
+    if [ -f "$DISABLED" ]; then say "  switch     off (marker present)"; else say "  switch     on"; fi
+    if curl -sf -m 1 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; then
+      say "  debug port $PORT open"
+    else
+      say "  debug port $PORT closed  (run 'reapple on')"
+    fi
+    say ""
+    if [ -f "$CONFIG" ]; then
+      node -e '
+        const fs=require("fs"),c=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+        for(const k of Object.keys(c)) if(!k.startsWith("_"))
+          process.stdout.write("  "+(c[k]?"on ":"off")+"  "+k+"\n");
+      ' "$CONFIG"
+    fi
+    say ""
+    dim "  log: $LOG"
+    ;;
+
+  config) shift; cmd_config "${1:-}" "${2:-}" ;;
+
+  logs)
+    [ -f "$LOG" ] && tail -n "${2:-60}" "$LOG" || say "no log yet at $LOG"
+    ;;
+
+  reset)
+    bold "reapple reset"
+    unload_agent
+    rm -f "$PAYLOAD" "$CONFIG" "$DISABLED"
+    bootstrap
+    load_agent
+    say "  settings and payload restored to defaults"
+    ;;
+
+  uninstall)
+    bold "reapple uninstall"
+    unload_agent
+    rm -f "$PLIST"
+    rm -rf "$HOME_DIR"
+    if curl -sf -m 1 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1 && [ -x "$NODE" ]; then
+      "$NODE" -e '
+        const port=process.argv[1];
+        (async()=>{
+          const t=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+          for(const p of t.filter(x=>x.type==="page"&&x.webSocketDebuggerUrl)){
+            const ws=new WebSocket(p.webSocketDebuggerUrl);
+            await new Promise(r=>ws.addEventListener("open",r,{once:true}));
+            ws.send(JSON.stringify({id:1,method:"Runtime.evaluate",
+              params:{expression:"window.__kabiStageDispose && window.__kabiStageDispose()",returnByValue:true}}));
+            await new Promise(r=>setTimeout(r,400));
+            ws.close();
+          }
+        })().catch(()=>{});
+      ' "$PORT" 2>/dev/null || true
+    fi
+    say ""
+    say "  removed. NetEase is untouched and still running."
+    say "  the --remote-debugging-port flag stays until you next quit and reopen it by hand."
+    ;;
+
+  -h|--help|help)
+    bold "reapple -- Apple Music's Now Playing page inside NetEase Cloud Music"
+    say ""
+    say "  reapple on           install, start, attach"
+    say "  reapple off          detach and stop (reversible, does not touch NetEase)"
+    say "  reapple status       what is installed, what is switched on"
+    say "  reapple config       list the component switches"
+    say "  reapple config <k> [on|off|true|false]"
+    say "  reapple logs [n]     tail the agent log"
+    say "  reapple reset        back to default settings"
+    say "  reapple uninstall    remove everything"
+    say ""
+    dim "  settings live in ~/.reapple/config.json"
+    ;;
+
+  *) die "unknown command '$1' -- try 'reapple --help'" ;;
+esac

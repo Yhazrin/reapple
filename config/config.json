@@ -1,0 +1,14 @@
+{
+  "_comment": "reapple component switches. Any key you delete falls back to the value shown here, so this file is safe to trim. See `reapple config --help`.",
+
+  "playPage": true,
+  "backdrop": true,
+  "artwork": true,
+  "songInfo": true,
+  "playbackBar": true,
+  "lyrics": true,
+  "footer": true,
+  "queue": true,
+
+  "miniBar": true
+}

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__WATCH__</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- One pass every 20 seconds, then exit. A resident daemon here would have to survive NetEase
+       being quit and relaunched underneath it; a stateless pass every 20s does not care, and cannot
+       leak. The cost is one process spawn a minute, which is invisible. -->
+  <key>StartInterval</key>
+  <integer>20</integer>
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/reapple-agent.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/reapple-agent.err.log</string>
+</dict>
+</plist>
