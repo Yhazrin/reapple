@@ -3,7 +3,7 @@
   // Single source of truth for the version. Every guard below reads STAGE_VERSION, so a
   // release bump can never leave one site (a negated compare, a cached marker) behind and
   // silently disable the whole stage.
-  var STAGE_VERSION = "81";
+  var STAGE_VERSION = "86";
   // Page.addScriptToEvaluateOnNewDocument can run before <html> exists. Do not set the
   // installed marker and then crash: attach in the parser's first document mutation,
   // before its first paint. The previous bootstrap is always disposable.
@@ -174,34 +174,69 @@
     // one playing-art width, centred on the artwork, and every offset below is the measured
     // Apple value at the 1512x949 reference window divided by --u (= artwork / 423.4).
     "#kabi-stack{position:fixed;z-index:20;color:#fff;--u:1;transition:left .65s cubic-bezier(.22,1,.36,1),top .65s cubic-bezier(.22,1,.36,1),width .65s cubic-bezier(.22,1,.36,1);}",
-    "#kabi-stack .head{display:flex;align-items:center;gap:calc(10px * var(--u));}",
+    // ---------------------------------------------------------------------
+    // The song-info rail, measured off Apple at its 1291 x 949 window.
+    //
+    // These are absolute points and deliberately NOT in var(--u), which is the artwork column's
+    // scale.  u was the reason this block read small: it is width/423.4, and 423.4 is the column
+    // width at a 1512pt window, so at 1291 u came out .8538 and every size here was multiplied by
+    // it.  The title rendered at 12.8pt against Apple's 18.2.  Type is a point size and Apple's does
+    // not follow the artwork column, so neither does this.
+    //
+    // The type itself was measured, not chosen.  Apple's accessibility tree exposes no font for
+    // this string at all -- the whole block is one AXButton with the title and subtitle folded into
+    // its description and AXFont empty -- so the size came off the pixels.  The cap ratio was
+    // calibrated against the replica itself, whose size is known exactly: 'HOYO-MiX' measured 7.00pt
+    // of cap at a rendered 9.8187pt, i.e. .713, which is SF Pro's cap height to within a
+    // thousandth.  Apple's title caps then measure 13.00pt and its subtitle caps 11.00pt, so
+    // 13.00/.713 = 18.2pt and 11.00/.713 = 15.4pt.
+    //
+    // Line heights are solved from Apple's baselines rather than set to a round ratio: its title
+    // baseline sits 15.9pt below the top of its own 37.5pt block and its subtitle baseline 32.6pt
+    // below, which is 18.4 and 17.1 for the two line boxes.
+    "#kabi-stack .head{display:flex;align-items:center;gap:10px;}",
     "#kabi-stack .names{flex:1;min-width:0;}",
-    "#kabi-stack .names b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:calc(15px * var(--u));line-height:calc(18px * var(--u));font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif;letter-spacing:-.012em;}",
-    "#kabi-stack .names span{display:block;margin-top:calc(3.7px * var(--u));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;font-size:calc(11.5px * var(--u));line-height:calc(14px * var(--u));font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif;color:rgba(255,255,255,.58);}",
-    "#kabi-stack .tools{display:flex;gap:calc(8px * var(--u));flex:none;}",
-    "#kabi-stack .tools button{width:calc(22px * var(--u))!important;height:calc(22px * var(--u))!important;min-width:calc(22px * var(--u))!important;padding:0!important;border:0!important;border-radius:50%!important;background:rgba(255,255,255,.16)!important;color:#fff!important;display:grid!important;place-items:center!important;font-size:0!important;overflow:hidden!important;}",
-    "#kabi-stack .tools button svg{width:auto!important;height:calc(11.3px * var(--u))!important;}",
+    "#kabi-stack .names b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:18.2px;line-height:18.4px;font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif;letter-spacing:-.012em;}",
+    "#kabi-stack .names span{display:block;margin-top:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;font-size:15.4px;line-height:17.1px;font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif;color:rgba(255,255,255,.58);}",
+    // Apple: favouriteButton and contextMenu are both 26 x 26 at page x 443.5 and 477.5 -- a 34pt
+    // pitch, i.e. an 8pt gap -- and contextMenu is flush with the column's right edge at 503.5
+    // while favourite's left edge is the 47pt from it.  They were 22 x 22 on a 26pt pitch.
+    "#kabi-stack .tools{display:flex;gap:8px;flex:none;}",
+    "#kabi-stack .tools button{width:26px!important;height:26px!important;min-width:26px!important;padding:0!important;border:0!important;border-radius:50%!important;background:rgba(255,255,255,.16)!important;color:#fff!important;display:grid!important;place-items:center!important;font-size:0!important;overflow:hidden!important;}",
+    "#kabi-stack .tools button svg{width:auto!important;height:12.4px!important;}",
     "#kabi-stack .tools [data-role='star']{overflow:hidden!important;}",
-    "#kabi-stack .tools [data-role='star'] i{width:calc(9.6px * var(--u));height:calc(9.6px * var(--u));background:#fff;-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;}",
+    // Apple's star is 14.5pt of ink inside its 26pt circle.
+    "#kabi-stack .tools [data-role='star'] i{width:14.5px;height:14.5px;background:#fff;-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;}",
     "@keyframes kabi-star-pop{0%{transform:scale(.55)}50%{transform:scale(1.28)}100%{transform:scale(1)}}",
     "#kabi-stack .tools [data-role='star'].pop i{animation:kabi-star-pop .42s cubic-bezier(.2,.8,.2,1);}",
-    "#kabi-stack .tools [data-role='more'] svg{width:calc(11.3px * var(--u))!important;height:auto!important;}",
+    "#kabi-stack .tools [data-role='more'] svg{width:12.4px!important;height:auto!important;}",
     "#kabi-stack .tools button:not([data-role]){display:none!important;}",
     "#kabi-times .quality i{font-style:normal;}",
     "#kabi-stack .tools [data-kabi-native='more'] .cmd-button-content{display:none!important;}",
-    "#kabi-stack .tools [data-kabi-native='more']::after{content:'';width:calc(11.3px * var(--u));height:calc(11.3px * var(--u));background:currentColor;-webkit-mask:var(--kabi-more-icon) center/contain no-repeat;}",
-    "#kabi-times{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;margin-top:calc(5.2px * var(--u));font-weight:500;font-size:calc(11px * var(--u));line-height:calc(13px * var(--u));font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif;color:rgba(255,255,255,.5);font-variant-numeric:tabular-nums;}",
+    "#kabi-stack .tools [data-kabi-native='more']::after{content:'';width:12.4px;height:12.4px;background:currentColor;-webkit-mask:var(--kabi-more-icon) center/contain no-repeat;}",
+    "#kabi-times{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;margin-top:6.5px;font-weight:500;font-size:11px;line-height:13px;font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif;color:rgba(255,255,255,.5);font-variant-numeric:tabular-nums;}",
     "#kabi-times .remain{text-align:right;}",
-    "#kabi-times .quality,#kabi-times .quality *{justify-self:center;background:transparent!important;border:0!important;box-shadow:none!important;outline:0!important;color:rgba(255,255,255,.5)!important;font-weight:500!important;font-size:calc(11px * var(--u))!important;line-height:calc(13px * var(--u))!important;font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif!important;padding:0!important;height:auto!important;min-height:0!important;}",
-    // Transport centres measured at 3.4 / 29.5 / 50 / 70.5 / 96.6 % of the slider width.
-    "#kabi-transport{position:relative;height:calc(27px * var(--u));margin-top:calc(21.3px * var(--u));}",
+    "#kabi-times .quality,#kabi-times .quality *{justify-self:center;background:transparent!important;border:0!important;box-shadow:none!important;outline:0!important;color:rgba(255,255,255,.5)!important;font-weight:500!important;font-size:11px!important;line-height:13px!important;font-family:'SF Pro Text',-apple-system,'PingFang SC',sans-serif!important;padding:0!important;height:auto!important;min-height:0!important;}",
+    // Transport, from Music.nowPlaying.*TransportControl.  All five centres sit on page y 715,
+    // which is what one shared row height buys: Apple gives prev and next 48pt boxes, play 28 and
+    // the two accessory buttons 30, and centres them all on one line rather than aligning the tops
+    // of the boxes.  The row is 48 tall and each button centres inside it.
+    //
+    // X as a fraction of the column, measured at Apple's 1291 window: centres 15 / 95 / 181 / 267
+    // / 346.5 from the column's left edge over a 361.5 column.  The accessory pair is flush --
+    // shuffle's box starts at the column's left edge, repeat's ends at its right.
+    //
+    // The glyph sizes are the ones already rendering here, frozen as points.  The boxes are
+    // Apple's; the marks inside them have not been measured yet, and scaling a mark to its box
+    // would make prev a 48pt triangle.
+    "#kabi-transport{position:relative;height:48px;margin-top:10px;}",
     "#kabi-transport button{position:absolute;top:50%;padding:0;border:0;background:transparent;color:rgba(255,255,255,.82);display:grid;place-items:center;cursor:pointer;transform:translate(-50%,-50%);}",
     "#kabi-transport button svg{display:block;width:auto;}",
-    "#kabi-transport [data-role='shuffle']{left:3.4%;}#kabi-transport [data-role='shuffle'] svg{height:calc(16px * var(--u));}",
-    "#kabi-transport [data-role='prev']{left:29.5%;}#kabi-transport [data-role='prev'] svg{height:calc(19px * var(--u));}",
-    "#kabi-transport [data-role='play']{left:50%;color:#fff;}#kabi-transport [data-role='play'] svg{height:calc(27px * var(--u));}",
-    "#kabi-transport [data-role='next']{left:70.5%;}#kabi-transport [data-role='next'] svg{height:calc(19px * var(--u));}",
-    "#kabi-transport [data-role='repeat']{left:96.6%;}#kabi-transport [data-role='repeat'] svg{height:calc(15.5px * var(--u));}",
+    "#kabi-transport [data-role='shuffle']{left:4.148%;width:30px;height:30px;}#kabi-transport [data-role='shuffle'] svg{height:13.7px;}",
+    "#kabi-transport [data-role='prev']{left:26.28%;width:48px;height:48px;}#kabi-transport [data-role='prev'] svg{height:16.2px;}",
+    "#kabi-transport [data-role='play']{left:50.069%;width:28px;height:28px;color:#fff;}#kabi-transport [data-role='play'] svg{height:23.1px;}",
+    "#kabi-transport [data-role='next']{left:73.858%;width:48px;height:48px;}#kabi-transport [data-role='next'] svg{height:16.2px;}",
+    "#kabi-transport [data-role='repeat']{left:95.851%;width:30px;height:30px;}#kabi-transport [data-role='repeat'] svg{height:13.2px;}",
     "#kabi-transport button.on{color:#fff;}",
     "html.kabi-on .page-footer{position:fixed!important;left:-3200px!important;top:0!important;width:320px!important;opacity:0!important;pointer-events:none!important;}",
     "html.kabi-on #page_pc_mini_bar,",
@@ -428,9 +463,9 @@
     // HOST-mode72.js StyledSliderContainer: normal top=0, hovered top=var(--smigcsb-0)=2px.
     // A fixed height alone did not remove that vertical hover shift. Own the entire rail state
     // in one place, including top/background, while preserving the host's seek handlers.
-    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl{position:relative!important;left:0!important;top:0!important;width:100%!important;height:calc(6px * var(--u))!important;min-height:calc(6px * var(--u))!important;margin:calc(22.7px * var(--u)) 0 0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important;border-radius:0!important;cursor:default;overflow:visible!important;transition:none!important;}",
-    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl::before{content:'';display:block!important;position:absolute!important;z-index:0;inset:0!important;height:calc(6px * var(--u))!important;border:0!important;border-radius:calc(3px * var(--u))!important;background:rgba(255,255,255,.274)!important;box-shadow:none!important;}",
-    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .track{position:absolute!important;left:0!important;top:0!important;height:calc(6px * var(--u))!important;max-width:100%!important;margin:0!important;border:0!important;border-radius:calc(3px * var(--u))!important;background:rgba(255,255,255,.684)!important;opacity:1!important;transform:none!important;transition:none!important;box-shadow:none!important;pointer-events:none!important;}",
+    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl{position:relative!important;left:0!important;top:0!important;width:100%!important;height:6px!important;min-height:6px!important;margin:23.5px 0 0!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important;border-radius:0!important;cursor:default;overflow:visible!important;transition:none!important;}",
+    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl::before{content:'';display:block!important;position:absolute!important;z-index:0;inset:0!important;height:6px!important;border:0!important;border-radius:3px!important;background:rgba(255,255,255,.274)!important;box-shadow:none!important;}",
+    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .track{position:absolute!important;left:0!important;top:0!important;height:6px!important;max-width:100%!important;margin:0!important;border:0!important;border-radius:3px!important;background:rgba(255,255,255,.684)!important;opacity:1!important;transform:none!important;transition:none!important;box-shadow:none!important;pointer-events:none!important;}",
     "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl::after,html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .track::before,html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .track::after,html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .cache,html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .dots,html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .thumb{display:none!important;}",
     // No hover, and that is the measurement rather than an omission. Two passes over the same
     // slider region at 120fps with the cursor hidden, one with the pointer parked 840px away and
@@ -442,8 +477,8 @@
     // close button turns it red, max |diff| 109 over 338 px in exactly the traffic-light bbox.
     // So there was a hover rule here (rail .34 -> .46, a 13pt knob scaling from .35) and Apple has
     // no such state; both are deleted rather than tuned.
-    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .hotzone-overlay{position:absolute!important;left:0!important;top:calc(-12px * var(--u))!important;width:100%!important;height:calc(30px * var(--u))!important;cursor:default!important;z-index:5!important;}",
-    "html.kabi-on #vinyl-page-container #kabi-times{margin-top:calc(5.2px * var(--u))!important;font-size:calc(11px * var(--u))!important;line-height:calc(13px * var(--u))!important;color:rgba(255,255,255,.5)!important;}html.kabi-on #vinyl-page-container #kabi-times .quality,html.kabi-on #vinyl-page-container #kabi-times .quality *{font-size:calc(11px * var(--u))!important;line-height:calc(13px * var(--u))!important;}",
+    "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .hotzone-overlay{position:absolute!important;left:0!important;top:-12px!important;width:100%!important;height:30px!important;cursor:default!important;z-index:5!important;}",
+    "html.kabi-on #vinyl-page-container #kabi-times{margin-top:6.5px!important;font-size:11px!important;line-height:13px!important;color:rgba(255,255,255,.5)!important;}html.kabi-on #vinyl-page-container #kabi-times .quality,html.kabi-on #vinyl-page-container #kabi-times .quality *{font-size:11px!important;line-height:13px!important;}",
     "@media(prefers-reduced-motion:reduce){#kabi-art,#kabi-stack,html.kabi-on .display,html.kabi-on.kabi-lyrics-off .display,html.kabi-on ul.lyric li.line,#kabi-bg,#kabi-bg .zoom,#kabi-bg .zoom canvas,#kabi-art .art-layer{transition:none!important;animation:none!important;}#kabi-stack .pop i{animation:none!important;}}"
 
   ].join("");
@@ -1025,12 +1060,17 @@
         if (button.getAttribute("data-kabi-native") === "more") return;
         var role = button.getAttribute("data-role");
         var target = null;
+        if (role === "shuffle" || role === "repeat") { switchMode(role); return; }
+        // Transport goes through the host's command layer now, not through .click() on its own
+        // hidden buttons.  Clicking them worked, but it bound us to NetEase's CSS class names and
+        // Chinese button titles, which are presentation and change between releases; the dva
+        // actions above are the model's own contract.  star and more still click through, because
+        // those have no action of their own -- they open host UI, which is what they should do.
+        if (role === "prev") { if (jumpTrack(-1)) return; }
+        if (role === "next") { if (jumpTrack(1)) return; }
+        if (role === "play") { if (togglePlay()) return; }
         if (role === "star") target = buttonOf("[data-testid='tid_redstar_btn']");
         if (role === "more") target = buttonOf("[title='更多操作']");
-        if (role === "shuffle" || role === "repeat") { switchMode(role); return; }
-        if (role === "prev") target = buttonOf(".page-footer [title^='上一首']");
-        if (role === "next") target = buttonOf(".page-footer [title^='下一首']");
-        if (role === "play") target = buttonOf(".page-footer [class*='cmd-icon-pause'], .page-footer [class*='cmd-icon-play']");
         if (target) target.click();
       });
     }
@@ -1141,7 +1181,7 @@
     repeatBtn.classList.toggle("on", repeatOn);
     repeatBtn.setAttribute("aria-pressed", String(repeatOn));
     repeatBtn.setAttribute("aria-label", modeName === "playOneCycle" ? "单曲循环；点击关闭" : modeName === "playCycle" ? "列表循环；点击单曲循环" : "开启列表循环");
-    var playing = !!document.querySelector(".page-footer [class*='cmd-icon-pause']");
+    var playing = isPlaying();
     var play = stack.querySelector("[data-role='play']");
     var icon = playing ? stack._icons.pause : stack._icons.play;
     if (play.getAttribute("data-icon") !== (playing ? "pause" : "play")) {
@@ -1289,18 +1329,24 @@
     var left = centerX - size / 2;
     var top = centerY - size / 2;
     var u = size / 423.4;
+    // The rail is anchored to Apple's song-info block, whose AX frame is 309.5 x 37.5 with its
+    // top at page y 596.5 of 949.  It used to be 686.5/949 of the page minus a 58.4u fudge for
+    // the head's height, so u entered twice: once through the fudge and once through every size
+    // below it.  Pinning the block's own top instead makes the two line boxes' baselines land on
+    // Apple's 612.4 and 629.1 on their own, and the rest of the column follows from the gaps.
+    var headTop = b.top + b.height * (596.5 / 949);
     if (stack.style.getPropertyValue("--u") !== u.toFixed(4)) stack.style.setProperty("--u", u.toFixed(4));
     // The footer is a sibling of the stack, not a descendant, so it does not inherit --u; every
     // calc() in its rules resolves against this copy.  Without it the capsule falls back to the
     // svg's 300x150 default size.
     var footEl = document.getElementById("kabi-foot");
     if (footEl && footEl.style.getPropertyValue("--u") !== u.toFixed(4)) footEl.style.setProperty("--u", u.toFixed(4));
-    var playingNow = !!document.querySelector(".page-footer [class*='cmd-icon-pause']");
+    var playingNow = isPlaying();
     document.documentElement.classList.toggle("kabi-paused", !playingNow);
     art.classList.toggle("is-paused", !playingNow);
     // Rail top 686.5/949 page height; the head block above it is 35.7u + 22.7u.
     pin(art, left, top, size, size);
-    pin(stack, left, b.top + b.height * (686.5 / 949) - 58.4 * u, size, null);
+    pin(stack, left, headTop, size, null);
     animateArtwork(art, playingNow);
     if (display && !off) {
       pin(display, b.left + b.width * (526 / 1024), b.top + b.height * (136 / 642), b.width * (354 / 1024), b.height * (411 / 642));
@@ -1440,6 +1486,100 @@
     return { list: list, cur: cur };
   }
 
+  // The host's command layer, read out of its own bundle rather than guessed.
+  //
+  // NetEase's player exposes no playback function on window: every command is a dva action, and
+  // the four that matter here are
+  //
+  //   playing/switchResumeOrPause       {triggerScene}
+  //   playingList/jump2Track            {flag: 1|-1, type: "call", triggerScene}
+  //   playing/playOneTrackInPlayingList {item: <resourceId>, flag, switchType, triggerScene}
+  //   async:action/popMenu              {resource, resourceType: "track", from: {scene}}
+  //
+  // The first three drive the player.  The fourth is better than it looks: it asks the host to
+  // build and pop ITS OWN native menu for a resource, which is why the row's "..." can carry
+  // real actions -- 收藏, 下载, 分享, 查看评论 -- rather than a look-alike we would have to keep
+  // in sync with a menu we cannot see.
+  //
+  // They were found by reading orpheus://orpheus/pub/hybrid/app.chunk.114fa7e.js and then
+  // confirmed against the running page, NOT by watching what crosses store.dispatch.  That is the
+  // whole reason this took a while: double-clicking one of the host's own rows puts exactly four
+  // types across dispatch -- playing/onUpdate, playing/onUpdateCurPlaying, page:vinylPage/setColor
+  // and async:playingListHandoff/* -- every one of them an EFFECT.  The action that started the
+  // audio was never among them, so a dispatch-log tap finds the smoke and not the fire, and
+  // playback looks like it bypasses the store entirely.  It does not; the command is simply
+  // dispatched from a component, not from the row handler you would think to instrument.
+  //
+  // One trap worth keeping: jump2Track lives under playingList/, not playing/.  The playing/ form
+  // is accepted by the dispatcher and does nothing at all, which on screen is indistinguishable
+  // from a dead button.
+  function hostCommand(type, payload) {
+    var store = hostStore_ || queueStore();
+    if (!store) return false;
+    store.dispatch({ type: type, payload: payload });
+    return true;
+  }
+
+  function togglePlay() {
+    return hostCommand("playing/switchResumeOrPause", { triggerScene: "vinyl" });
+  }
+
+  function jumpTrack(dir) {
+    return hostCommand("playingList/jump2Track", {
+      flag: dir, type: "call", triggerScene: "vinyl"
+    });
+  }
+
+  // `item` may be the resourceId as a string: the reducer looks the entry up in curPlayingList
+  // itself when it is given one, which is both the shorter form and the one that cannot drift out
+  // of step with the host's own entry objects.
+  function playEntry(entry) {
+    if (!entry || entry.resourceId == null) return false;
+    return hostCommand("playing/playOneTrackInPlayingList", {
+      item: String(entry.resourceId), flag: 0, switchType: "call", triggerScene: "vinyl"
+    });
+  }
+
+  // The shape is copied from the host's own row, which is the only place this menu is built for a
+  // track in the playing list -- its mini-player row does exactly this when you right-click one:
+  //
+  //   var r = curPlayingList.find(function (e) { return e.resourceId === id || e.trackId === id; });
+  //   r && dispatch({ type: "async:action/popMenu", payload: {
+  //        resource: r, resourceType: "track", from: { scene: "playingList" },
+  //        actionPayload: { rawEvent: <the React synthetic event> }, parentData: { ... } } });
+  //
+  // Three details are the host's and not guesses.  `resource` is the LIST ENTRY, not entry.track
+  // -- the entry carries the fromInfo, displayOrder and href the menu builder reads.  The scene is
+  // "playingList", which is the scene that means "this is a row of the queue".  And rawEvent
+  // carries the click point: winhelper.popupMenu is handed {content, hotkey, left_border_size,
+  // menu_type} and no coordinates whatsoever, so the position can only arrive some other way, and
+  // this is the only channel the host has.  Send the entry and the scene without it and the menu
+  // still appears -- at the bottom-left corner of the window, as far from the mark as it gets.
+  function popHostMenu(entry, x, y) {
+    if (!entry) return false;
+    return hostCommand("async:action/popMenu", {
+      resource: entry,
+      resourceType: "track",
+      from: { scene: "playingList" },
+      actionPayload: {
+        rawEvent: {
+          clientX: x, clientY: y, pageX: x, pageY: y,
+          stopPropagation: function () {}, preventDefault: function () {}
+        }
+      }
+    });
+  }
+
+  // Play state read from the model, not scraped out of the host's markup.  The scrape worked --
+  // it looked for the pause glyph, which only exists while playing -- but it coupled the replica
+  // to NetEase's CSS class names for a fact the store already states outright.  The enum is not a
+  // guess: End -1, Stop 0, Pause 1, Playing 2, read out of the same chunk as the commands above.
+  function isPlaying() {
+    var store = hostStore_ || queueStore();
+    var st = store && store.getState();
+    return !!(st && st.playing && st.playing.playingState === 2);
+  }
+
   function httpToHttps(u) {
     return typeof u === "string" && u.indexOf("http:") === 0
       ? "https:" + u.slice(5)
@@ -1497,6 +1637,10 @@
       var pic = t.album && thumbUrl(httpToHttps(t.album.picUrl), 34);
       row.style.display = "";
       row.style.top = idx * QUEUE_ROW + "px";
+      // The pool recycles rows on every scroll frame, so a click cannot be resolved to a track by
+      // counting children.  The index is stamped here and the listener below re-reads the list,
+      // so a stale click lands on whatever now occupies that slot rather than on a wrong song.
+      row._idx = idx;
       row._art.style.backgroundImage = pic ? 'url("' + pic + '")' : "none";
       row._t1.textContent = t.name || "";
       row._t2.textContent = t.album ? ((t.artists || []).map(function (a) { return a.name; }).join(", ")) : "";
@@ -1567,9 +1711,13 @@
         '</svg>';
     var rowTpl = document.createElement("div");
     rowTpl.className = "row";
+    // role/aria because these stopped being decoration: a row plays, and the mark opens NetEase's
+    // own menu.  Apple's queue carries the same information to VoiceOver.
     rowTpl.innerHTML =
       '<div class="art"></div><div class="tx"><span class="t1"></span><span class="t2"></span></div>' +
-      '<div class="more"></div><div class="rule2"></div>';
+      '<div class="more" role="button" tabindex="-1" aria-label="\u66f4\u591a\u64cd\u4f5c"></div>' +
+      '<div class="rule2"></div>';
+    rowTpl.setAttribute("role", "listitem");
     que = {
       wrap: wrap,
       scroller: wrap.querySelector(".scroller"),
@@ -1581,6 +1729,23 @@
     };
     que.onScroll = function () { queuePaint(); };
     que.scroller.addEventListener("scroll", que.onScroll, { passive: true });
+
+    // One listener for the whole panel, not one per row: the pool recycles about twenty elements
+    // as the list scrolls, and twenty closures rebinding on every frame is the per-frame allocation
+    // this panel is specifically built to avoid.  Delegation also survives the pool being rebuilt.
+    que.rows.addEventListener("click", function (e) {
+      var row = e.target && e.target.closest ? e.target.closest(".row") : null;
+      if (!row || row._idx == null) return;
+      var entry = (que.data.list || [])[row._idx];
+      if (!entry) return;
+      // The mark is a child of the row, so it would otherwise play the track and open the menu.
+      if (e.target.classList && e.target.classList.contains("more")) {
+        e.stopPropagation();
+        popHostMenu(entry, e.clientX, e.clientY);
+      } else {
+        playEntry(entry);
+      }
+    });
     root.appendChild(wrap);
   }
 
