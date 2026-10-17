@@ -33,11 +33,26 @@ That discipline is the whole project. A few of the things it has already caught:
 | Queue `…` | 2.6pt dots at alpha .59 | 2.00pt dots at alpha **.193**, neutral across all three channels |
 | Queue `…` position | 25pt from the panel edge | 31.0pt |
 | Queue pills | 10pt gap, 9pt margins | 17.5pt gap, 13pt margins, fill rgb(209,208,204) |
+| Song title | 15pt × the artwork column's scale | **18.2pt**, measured off Apple's ink |
+| Transport hit boxes | sized by their own glyphs | **30 / 48 / 28 / 48 / 30**, from `Music.nowPlaying.*TransportControl` |
 
-The AutoPlay row is the one worth reading twice: the old comment claimed the two circles
-"cross where Apple's cross" while its own numbers left a visible gap, so the mark rendered
-as `oo` next to a comment asserting an `∞`. Reading the ink run per scanline showed one
-continuous blob through the middle — the lobes touch. The numbers now say so.
+The song-title row is the one that taught the method. Apple's accessibility tree
+exposes no font for that string at all — the whole block is a single `AXButton`
+with the title and subtitle folded into its description and `AXFont` empty — so the
+size had to come off the pixels, and the pixels alone are not enough: a thresholded
+cap height gives 18.2pt and the glyph advances give 13.4, which is not a rounding
+disagreement. What settled it was calibrating the cap ratio against the replica
+itself, whose size is known exactly. `HOYO-MiX` measured 7.00pt of cap at a
+rendered 9.8187pt — a ratio of .713, which is SF Pro's cap height to within a
+thousandth. Apple's title caps then measure 13.00pt and its subtitle caps 11.00pt,
+and 13.00/.713 is 18.2. A ruler you can check is worth more than a constant you
+remember.
+
+The AutoPlay row is worth reading twice: the old comment claimed the two circles
+"cross where Apple's cross" while its own numbers left a visible gap, so the mark
+rendered as `oo` next to a comment asserting an `∞`. Reading the ink run per
+scanline showed one continuous blob through the middle — the lobes touch. The
+numbers now say so.
 
 Full measurement notes are in [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md).
 
@@ -129,19 +144,25 @@ of it on the way out. `reapple` rides that rather than reimplementing it.
 Stated plainly, because a project that claims 1:1 and quietly isn't is worse than one that
 says where it stops.
 
-- **The queue row `…` has no menu yet.** The styling is measured and correct, including the
-  hover state, which takes the artwork's own colour the way Apple's does. The actions are
-  not built, and the reason is structural rather than unfinished: NetEase's player runs
-  through a native command bridge, not the JS store. `store.dispatch` never sees playback
-  at all — the only type that crosses it while a track advances is `host/onUpdate` — and
-  `window.api`, the bridge handle, is an empty object. NetEase also renders its track rows
-  with working context menus only on lists it owns; the playing list has no rendered rows
-  anywhere in the DOM, so there is no host menu to delegate to. Building the menu means
-  mapping the native bridge first.
-- **Queue rows are not clickable to play.** Same reason.
+- **The queue row `…` opens NetEase's real menu, but it opens it in the wrong place.**
+  The styling is measured and correct, including the hover state, which takes the
+  artwork's own colour the way Apple's does, and the actions are NetEase's own —
+  播放, 下一首播放, 查看评论, 收藏, 下载, 分享, 复制链接 — because the row asks the
+  host to build its menu rather than reimplementing one. What it cannot do is place it.
+  `winhelper.popupMenu` is handed `{content, hotkey, left_border_size, menu_type}` and no
+  coordinates at all, so the position has to arrive some other way; the only channel the
+  host has is the click point in `actionPayload.rawEvent`, and the row now sends it, in the
+  host's own shape. Verified so far: the menu appears, with the right actions. Not
+  verified: that it appears at the mark. Last confirmed behaviour was the window's
+  bottom-left corner, and the position has not been re-checked since the payload shape
+  changed.
+- **The song info and the playback bar are measured; their motion is not.** Layout, type
+  size and hit geometry are off Apple's own tree, and every row of the rail now matches to
+  within a rounding step. The transitions, timing curves and the artwork's play/pause
+  motion are faithful in kind but not dug as deep as the layout was, and the transport
+  glyphs inside their now-measured 48pt boxes are still the marks that were already
+  rendering — the boxes are Apple's, the marks inside them are not measured yet.
 - **The backdrop wash reads greyer than Apple's** on some albums.
-- **Motion on the song info and playback bar** is faithful in curve and duration but not yet
-  dug as deep as the layout and the queue.
 
 ## Licence
 
