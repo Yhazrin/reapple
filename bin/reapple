@@ -99,6 +99,8 @@ cmd_config() {
           lyrics:"the synced lyric list and its scroll algorithm",
           footer:"the two liquid-glass buttons, bottom right",
           queue:"the queue sheet the right-hand button opens",
+          lyricHoverClear:"unblur the hovered lyric line",
+          lyricScrollClear:"unblur lyrics during manual browsing",
           miniBar:"reserved for the floating mini-bar capsule; not built yet"
         };
         for(const k of Object.keys(notes)){
@@ -120,7 +122,7 @@ cmd_config() {
         const fs=require("fs"),p=process.argv[1],k=process.argv[2],w=process.argv[3];
         let c={}; try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
         if(k.startsWith("_")){console.error("reapple: "+k+" is a comment, not a switch");process.exit(1)}
-        const known=["playPage","backdrop","artwork","songInfo","playbackBar","lyrics","footer","queue","miniBar"];
+        const known=["playPage","backdrop","artwork","songInfo","playbackBar","lyrics","footer","queue","lyricHoverClear","lyricScrollClear","miniBar"];
         if(!known.includes(k)){console.error("reapple: unknown switch "+k+"\n  known: "+known.join(", "));process.exit(1)}
         const before=c[k];
         c[k] = w==="toggle" ? !before

@@ -3,7 +3,7 @@
   // Single source of truth for the version. Every guard below reads STAGE_VERSION, so a
   // release bump can never leave one site (a negated compare, a cached marker) behind and
   // silently disable the whole stage.
-  var STAGE_VERSION = "86";
+  var STAGE_VERSION = "92";
   // Page.addScriptToEvaluateOnNewDocument can run before <html> exists. Do not set the
   // installed marker and then crash: attach in the parser's first document mutation,
   // before its first paint. The previous bootstrap is always disposable.
@@ -45,6 +45,8 @@
       lyrics: true,       // the synced lyric list and its scroll algorithm
       footer: true,       // the two liquid-glass buttons, bottom right
       queue: true,        // the queue sheet the right-hand button opens
+      lyricHoverClear: true,
+      lyricScrollClear: true,
       miniBar: true       // reserved for the floating mini-bar capsule; not built yet
     };
     // Re-read rather than latch: the injector rewrites window.__reappleConfig whenever the config
@@ -53,13 +55,228 @@
     return function read() {
       var out = {};
       var src = window.__reappleConfig || {};
+      var pending = readPendingSettings();
       Object.keys(defaults).forEach(function (k) {
-        out[k] = typeof src[k] === "boolean" ? src[k] : defaults[k];
+        out[k] = pending && typeof pending.values[k] === "boolean" ? pending.values[k] : typeof src[k] === "boolean" ? src[k] : defaults[k];
       });
       return out;
     };
   })();
+  // Settings are app-local, not a network service. UI writes a small validated pending record;
+  // the existing local injector consumes it into config.json atomically on its next pass.
+  var REAPPLE_PENDING_KEY = "reapple.settings.pending.v1";
+  var REAPPLE_KEYS = ["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear"];
+  var settingsView_ = null;
+  var lyricMenu_ = null;
+  function readPendingSettings() {
+    try {
+      var p = window.__reapplePendingSettings || JSON.parse(localStorage.getItem(REAPPLE_PENDING_KEY) || "null");
+      return p && typeof p === "object" && p.values && typeof p.values === "object" ? p : null;
+    } catch (_) { return window.__reapplePendingSettings || null; }
+  }
+  function setPluginSetting(key, value) {
+    if (REAPPLE_KEYS.indexOf(key) < 0 || typeof value !== "boolean") return;
+    var old = readPendingSettings(), values = {};
+    REAPPLE_KEYS.forEach(function (name) { if (old && typeof old.values[name] === "boolean") values[name] = old.values[name]; });
+    values[key] = value;
+    var pending = { at: Date.now(), baseKey: window.__reappleSettingsKey || "", values: values };
+    window.__reapplePendingSettings = pending;
+    try { localStorage.setItem(REAPPLE_PENDING_KEY, JSON.stringify(pending)); }
+    catch (_) { pending.storageFailed = true; }
+    dirty.all = true;
+    tick();
+  }
+  function nativeLyricState() {
+    var store = hostStore_ || queueStore(), state = store && store.getState();
+    var lyric = state && state["async:lyric"] || {};
+    return { mode: state && state.setting && state.setting.lyricMode || "none",
+      translation: !!(lyric.tlyricLines && lyric.tlyricLines.length),
+      roman: !!(lyric.romaLyricLines && lyric.romaLyricLines.length) };
+  }
+  function setNativeLyricMode(mode) {
+    if (["none", "translate", "roman"].indexOf(mode) < 0) return;
+    var store = hostStore_ || queueStore();
+    if (!store) return;
+    // HOST-mode72.js LyricOperator uses precisely this action. It persists through the
+    // host's updateSetting effect, and updates the native renderer and desktop lyrics.
+    store.dispatch({ type: "setting/changeLyricMode", payload: { type: mode === "none" ? "translate" : mode, checked: mode !== "none" } });
+    dirty.all = true;
+    schedule("all");
+  }
+  function scrubControlTemplate(node) {
+    [node].concat([].slice.call(node.querySelectorAll("*"))).forEach(function (el) {
+      [].slice.call(el.attributes).forEach(function (a) {
+        if (a.name === "id" || a.name === "_nk" || a.name === "datalog" || a.name.indexOf("data-") === 0 || a.name.indexOf("aria-") === 0 || a.name.indexOf("on") === 0) el.removeAttribute(a.name);
+      });
+    });
+    return node;
+  }
+  function closeSettingsPanel(view) {
+    view = view || settingsView_;
+    if (!view || !view.open) return;
+    view.open = false;
+    view.main.removeAttribute("data-reapple-settings-open");
+    view.panel.hidden = true;
+    view.link.classList.remove("cmd-anchor-link-title-active");
+    view.link.removeAttribute("aria-current");
+    if (view.savedActive && view.savedActive.isConnected) view.savedActive.classList.add("cmd-anchor-link-title-active");
+    view.scroller.scrollTop = view.savedScroll || 0;
+  }
+  function disposeSettingsPanel() {
+    var view = settingsView_;
+    if (!view) return;
+    closeSettingsPanel(view);
+    view.nav.removeEventListener("click", view.navigate, true);
+    view.nav.removeEventListener("keydown", view.keydown);
+    view.observer.disconnect();
+    view.tab.remove(); view.panel.remove(); settingsView_ = null;
+  }
+  function refreshSettingsPanel() {
+    var view = settingsView_;
+    if (!view) return;
+    var native = nativeLyricState();
+    Object.keys(view.controls).forEach(function (key) {
+      var item = view.controls[key], on = !!cfg[key];
+      item.input.checked = on; item.input.setAttribute("aria-checked", String(on));
+      ["cmd-checkbox-checked", "cmd-checkbox-unChecked"].forEach(function (c) {
+        var wanted = c === (on ? "cmd-checkbox-checked" : "cmd-checkbox-unChecked");
+        if (item.control.classList.contains(c) !== wanted) item.control.classList.toggle(c, wanted);
+      });
+      var inner = item.control.querySelector(".cmd-checkbox-inner");
+      if (inner.classList.contains("cmd-checkbox-inner-checked") !== on) inner.classList.toggle("cmd-checkbox-inner-checked", on);
+      var mark = item.control.querySelector(".cmd-checkbox-inner-display");
+      if (on && !mark.firstChild) mark.appendChild(view.tick.cloneNode(true));
+      if (!on && mark.firstChild) mark.replaceChildren();
+    });
+    view.radios.forEach(function (item) {
+      var on = item.input.value === native.mode;
+      item.input.checked = on; item.input.setAttribute("aria-checked", String(on));
+      if (item.control.classList.contains("cmd-radio-checked") !== on) item.control.classList.toggle("cmd-radio-checked", on);
+      var inner = item.control.querySelector(".cmd-radio-inner");
+      if (inner.classList.contains("cmd-radio-inner-checked") !== on) inner.classList.toggle("cmd-radio-inner-checked", on);
+      var mark = item.control.querySelector(".cmd-radio-inner-display");
+      if (on && !mark.firstChild && view.radioTick) mark.appendChild(view.radioTick.cloneNode(true));
+      if (!on && mark.firstChild) mark.replaceChildren();
+    });
+    var pending = readPendingSettings();
+    var status = pending ? pending.storageFailed ? "已即时应用；本地存储不可用，等待本机注入器保存。" : "已即时应用并暂存；本机配置同步中（最长约20秒）。" : "设置已保存；重启后继续生效。";
+    if (view.status.textContent !== status) view.status.textContent = status;
+    var availability = "当前歌曲：" + (native.translation ? "有翻译" : "无翻译") + " · " + (native.roman ? "有罗马音" : "无罗马音") + "。原生偏好会用于后续支持的歌曲，不生成缺失内容。";
+    if (view.availability.textContent !== availability) view.availability.textContent = availability;
+    if (view.open) {
+      view.nav.querySelectorAll(".cmd-anchor-link-title-active").forEach(function (el) { if (el !== view.link) el.classList.remove("cmd-anchor-link-title-active"); });
+      if (!view.link.classList.contains("cmd-anchor-link-title-active")) view.link.classList.add("cmd-anchor-link-title-active");
+    }
+  }
+  function syncSettingsPanel() {
+    var scroller = document.getElementById("page_pc_setting");
+    var main = scroller && scroller.querySelector(":scope > main");
+    var nav = scroller && scroller.parentElement.querySelector(".cmd-anchor-link-wrapper");
+    if (!scroller || !main || !nav) { if (settingsView_) disposeSettingsPanel(); return; }
+    if (settingsView_ && (settingsView_.main !== main || !settingsView_.tab.isConnected || !settingsView_.panel.isConnected)) disposeSettingsPanel();
+    if (settingsView_) { refreshSettingsPanel(); return; }
+    var sample = scroller.querySelector(".cmd-checkbox"), radioSample = scroller.querySelector(".cmd-radio");
+    var sectionSample = document.getElementById("normalMac"), anchorSample = nav.querySelector(".cmd-anchor-link");
+    var tickSample = scroller.querySelector(".cmd-checkbox-inner-display > *");
+    var radioTick = scroller.querySelector(".cmd-radio-inner-checked .cmd-radio-inner-display > *");
+    if (!sample || !sectionSample || !anchorSample || !tickSample || !radioSample) return;
+    var panel = document.createElement("section"); panel.id = "reapple-settings-panel";
+    panel.className = sectionSample.className; panel.hidden = true;
+    var heading = document.createElement("h3"); heading.textContent = "Reapple Music"; panel.appendChild(heading);
+    var content = document.createElement("div"); content.className = "content"; panel.appendChild(content);
+    var tab = document.createElement("div"); tab.id = "reapple-settings-tab"; tab.className = anchorSample.className; tab.setAttribute("role", "listitem");
+    var link = document.createElement("div"); link.id = "reapple-settings-link"; link.className = "cmd-anchor-link-title"; link.textContent = "Reapple Music"; link.title = "Reapple Music"; link.tabIndex = 0; link.setAttribute("role", "link"); link.setAttribute("aria-controls", panel.id); tab.appendChild(link);
+    var view = { nav: nav, scroller: scroller, main: main, panel: panel, tab: tab, link: link, open: false, controls: {}, radios: [], tick: scrubControlTemplate(tickSample.cloneNode(true)) };
+    function group(name) {
+      var section = document.createElement("section"); section.className = "item list";
+      var h4 = document.createElement("h4"); h4.textContent = name; section.appendChild(h4); content.appendChild(section); return section;
+    }
+    function checkbox(group, key, title, disabled) {
+      var label = document.createElement("label"); label.className = "list-item";
+      var control = scrubControlTemplate(sample.cloneNode(true)), input = control.querySelector("input");
+      var addon = control.querySelector(".cmd-checkbox-addon"); addon.textContent = title;
+      input.id = "reapple-config-" + key; input.setAttribute("aria-label", title); input.disabled = !!disabled; input.checked = disabled ? false : !!cfg[key];
+      control.querySelector(".cmd-checkbox-inner-display").replaceChildren();
+      label.appendChild(control); group.appendChild(label);
+      if (disabled) { control.classList.remove("cmd-checkbox-checked"); control.classList.add("cmd-checkbox-unChecked"); control.querySelector(".cmd-checkbox-inner").classList.remove("cmd-checkbox-inner-checked"); label.title = "后续计划，当前版本未实现"; control.classList.add("cmd-checkbox-disabled"); return; }
+      input.addEventListener("change", function () { setPluginSetting(key, input.checked); });
+      view.controls[key] = { input: input, control: control };
+    }
+    var master = group("插件开关"); checkbox(master, "playPage", "启用 Reapple Music 播放器");
+    var modules = group("播放器组件");
+    [["backdrop", "专辑氛围背景"], ["artwork", "专辑封面"], ["songInfo", "歌曲信息"], ["playbackBar", "进度条与时间"], ["lyrics", "歌词"], ["footer", "底部歌词／队列按钮"], ["queue", "播放列表"]].forEach(function (row) { checkbox(modules, row[0], row[1]); });
+    var browsing = group("歌词交互"); checkbox(browsing, "lyricHoverClear", "鼠标悬停的歌词行取消模糊"); checkbox(browsing, "lyricScrollClear", "手动浏览歌词时取消全部模糊");
+    var language = group("歌词版本");
+    [["none", "原文"], ["translate", "翻译"], ["roman", "罗马音"]].forEach(function (row) {
+      var label = document.createElement("label"); label.className = "list-item";
+      var control = scrubControlTemplate(radioSample.cloneNode(true)), input = control.querySelector("input");
+      input.name = "reapple-native-lyric-mode"; input.value = row[0]; input.setAttribute("aria-label", row[1]);
+      control.querySelector(".cmd-radio-addon").textContent = row[1];
+      control.querySelector(".cmd-radio-inner-display").replaceChildren();
+      label.appendChild(control); language.appendChild(label); view.radios.push({ input: input, control: control });
+      input.addEventListener("change", function () { if (input.checked) setNativeLyricMode(row[0]); });
+    });
+    var availability = document.createElement("p"); view.availability = availability; language.appendChild(availability);
+    var hint = document.createElement("p"); hint.textContent = "原文／翻译／罗马音沿用网易云原生互斥设置。播放器内可右键点击歌词按钮切换，不增加常驻组件。"; language.appendChild(hint);
+    var future = group("后续计划"); checkbox(future, "miniBar", "悬浮胶囊播放栏（尚未实现）", true);
+    var status = document.createElement("p"); status.id = "reapple-settings-status"; status.setAttribute("role", "status"); view.status = status; content.appendChild(status);
+    view.navigate = function (event) {
+      var target = event.target.closest(".cmd-anchor-link-title"); if (!target) return;
+      if (target !== link) { closeSettingsPanel(view); return; }
+      event.preventDefault(); event.stopPropagation();
+      if (!view.open) { view.savedScroll = scroller.scrollTop; view.savedActive = nav.querySelector(".cmd-anchor-link-title-active"); }
+      view.open = true; main.setAttribute("data-reapple-settings-open", "true"); panel.hidden = false; link.setAttribute("aria-current", "page"); scroller.scrollTop = 0; refreshSettingsPanel();
+    };
+    view.keydown = function (event) { if (event.target === link && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); link.click(); } };
+    view.observer = new MutationObserver(function () { if (view.open) refreshSettingsPanel(); });
+    view.tick.setAttribute("aria-hidden", "true");
+    view.radioTick = radioTick && scrubControlTemplate(radioTick.cloneNode(true));
+    if (view.radioTick) view.radioTick.setAttribute("aria-hidden", "true");
+    settingsView_ = view; main.appendChild(panel); nav.appendChild(tab);
+    nav.addEventListener("click", view.navigate, true); nav.addEventListener("keydown", view.keydown);
+    view.observer.observe(nav, { subtree: true, attributes: true, attributeFilter: ["class"] });
+    refreshSettingsPanel();
+  }
+  function closeLyricMenu() {
+    if (lyricMenu_) { lyricMenu_.remove(); lyricMenu_ = null; }
+  }
+  function lyricMenuOutside(event) { if (lyricMenu_ && !lyricMenu_.contains(event.target)) closeLyricMenu(); }
+  function lyricMenuKey(event) { if (event.key === "Escape") { closeLyricMenu(); if (foot) foot.lyric.focus(); } }
+  function openLyricMenu(event) {
+    event.preventDefault(); closeLyricMenu();
+    var native = nativeLyricState(), root = document.getElementById("vinyl-page-container"); if (!root) return;
+    var menu = document.createElement("div"); menu.id = "reapple-lyric-menu"; menu.setAttribute("role", "menu"); menu.setAttribute("aria-label", "歌词版本");
+    [["none", "原文", true], ["translate", "翻译", native.translation], ["roman", "罗马音", native.roman]].forEach(function (row) {
+      var b = document.createElement("button"); b.type = "button"; b.textContent = row[1] + (row[2] ? "" : "（此歌曲无内容）"); b.disabled = !row[2]; b.setAttribute("role", "menuitemradio"); b.setAttribute("aria-checked", String(native.mode === row[0]));
+      b.addEventListener("click", function () { setNativeLyricMode(row[0]); closeLyricMenu(); foot.lyric.focus(); }); menu.appendChild(b);
+    });
+    root.appendChild(menu); lyricMenu_ = menu;
+    var box = foot.lyric.getBoundingClientRect(), view = stageBox();
+    // Functional NetEase adaptation, not an Apple-measured extra component. Appears only
+    // on request; leaves the existing pill, artwork, lyric columns and their geometry intact.
+    var width = menu.offsetWidth, height = menu.offsetHeight;
+    pin(menu, Math.max(view.left, Math.min(box.left, view.right - width)), Math.max(view.top, box.top - height), width, height);
+    menu.style.setProperty("z-index", "60", "important"); menu.querySelector("button:not(:disabled)").focus();
+  }
+  var popupStyles_ = new Map();
+  function returnNativeControls() {
+    popupStyles_.forEach(function (style, el) { if (el.isConnected) { if (style == null) el.removeAttribute("style"); else el.setAttribute("style", style); } });
+    popupStyles_.clear();
+    document.querySelectorAll("#kabi-stack .slider-vinyl").forEach(function (slider) {
+      var home = slider._kabiHome;
+      if (home && home.parent && home.parent.isConnected) { home.parent.insertBefore(slider, home.next && home.next.parentNode === home.parent ? home.next : null); delete slider._kabiHome; }
+    });
+    borrowedControls_.forEach(function (el) {
+      var home = el._kabiControlHome;
+      if (home && home.parent && home.parent.isConnected && el.isConnected) home.parent.insertBefore(el, home.next && home.next.parentNode === home.parent ? home.next : null);
+      ["data-role", "aria-label"].forEach(function (attr) { var value = home && home[attr === "data-role" ? "role" : "label"]; if (value == null) el.removeAttribute(attr); else el.setAttribute(attr, value); });
+      el.removeAttribute("data-kabi-native"); el.style.removeProperty("--kabi-more-icon"); delete el._kabiControlHome;
+    });
+    borrowedControls_.clear();
+  }
+
   var cfg = CFG();
+  var previousMaster_ = null;
   // The element each switch owns.  Used for the master switch's DOM teardown and for the hide rules,
   // so a switch that cannot cleanly early-return its build path still ends up invisible.
   function hideCss(c) {
@@ -74,8 +291,8 @@
       return "html #kabi-bg,html #kabi-art,html #kabi-stack,html #kabi-times,html #kabi-foot,html .kabi-queue{display:none!important;}";
     }
     if (!c.artwork) rules.push("#kabi-art{display:none!important;}");
-    if (!c.songInfo) rules.push("#kabi-times .meta{display:none!important;}");
-    if (!c.playbackBar) rules.push("#kabi-times .times,#kabi-times .slider-vinyl{display:none!important;}");
+    if (!c.songInfo) rules.push("#kabi-stack .head{display:none!important;}");
+    if (!c.playbackBar) rules.push("#kabi-stack .bar,#kabi-stack #kabi-times{display:none!important;}");
     if (!c.lyrics) rules.push("ul.lyric{display:none!important;}");
     if (!c.footer) rules.push("#kabi-foot{display:none!important;}");
     if (!c.queue) rules.push(".kabi-queue{display:none!important;}");
@@ -113,9 +330,9 @@
 
   var css = [
     "html.kabi-on #vinyl-page-container{background:transparent!important;overflow:hidden!important;}",
-    "html.kabi-on #VINYL_COVER_ELEMENT_ID,",
-    "html.kabi-on [class*='CoverBackgroundContainer']{background:transparent!important;background-image:none!important;}",
-    "html.kabi-on [class*='CoverBackgroundContainer']>.mask{display:none!important;}",
+    "html.kabi-on #vinyl-page-container #VINYL_COVER_ELEMENT_ID,",
+    "html.kabi-on #vinyl-page-container [class*='CoverBackgroundContainer']{background:transparent!important;background-image:none!important;}",
+    "html.kabi-on #vinyl-page-container [class*='CoverBackgroundContainer']>.mask{display:none!important;}",
     // Backdrop: MediaCoreUI draws three hierarchical mesh instances of the artwork
     // (rotation_vertex timeScale 2*PI*t/TS, scale 1+.34*mix(sp.x,sp.y,.1)^2) and composites
     // them largest-first. Each instance carries the recovered colour chain in its raster.
@@ -138,38 +355,40 @@
     "#kabi-bg .zoom > :not(canvas){display:none!important;}",
     "@keyframes kabi-mesh{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}",
     "html.kabi-paused #kabi-bg .zoom canvas{animation-play-state:paused;}",
-    "html.kabi-on #page_pc_songplay,",
-    "html.kabi-on [class*='ClassicPageContainer'],",
-    "html.kabi-on [class*='VinylPageLayoutContainer']{position:relative;z-index:1;background:transparent!important;}",
-    "html.kabi-on [class*='CommentTab'],",
-    "html.kabi-on .handle,",
-    "html.kabi-on .together-head,",
-    "html.kabi-on [class*='SoundEffectAnimation'],",
-    "html.kabi-on [class*='TrackTitleContainer'],",
-    "html.kabi-on .tab-group,",
+    "html.kabi-on #vinyl-page-container #page_pc_songplay,",
+    "html.kabi-on #vinyl-page-container [class*='ClassicPageContainer'],",
+    "html.kabi-on #vinyl-page-container [class*='VinylPageLayoutContainer']{position:relative;z-index:1;background:transparent!important;}",
+    "html.kabi-on #vinyl-page-container [class*='CommentTab'],",
+    "html.kabi-on #vinyl-page-container .handle,",
+    "html.kabi-on #vinyl-page-container .together-head,",
+    "html.kabi-on #vinyl-page-container [class*='SoundEffectAnimation'],",
+    "html.kabi-on #vinyl-page-container [class*='TrackTitleContainer'],",
+    "html.kabi-on #vinyl-page-container .tab-group,",
     // Live DOM inspection (QUEUE70, 2026-10-18): LyricContribuleTipContainer contains both
     // .tip.classic-mode and LyricDisplayInnerContainer > ul.lyric. Hiding the wrapper gives
     // all 52 lines zero-sized rects even with .display opacity=1. Hide only the contribution
     // prompt, retaining the host's flex wrapper and the lyric scroll container.
-    "html.kabi-on [class*='LyricContribule']>.tip,",
-    "html.kabi-on [class*='LyricOperator'],",
-    "html.kabi-on img[src*='vinyl/disc'],",
-    "html.kabi-on img[src*='vinyl/outline'],",
-    "html.kabi-on .cover-container-rotate>.CenterImg_c1feg9h6:not([class*='Cover_']){display:none!important;}",
-    "html.kabi-on .page-header .right>button,",
-    "html.kabi-on .page-header [class*='WindowOpBar']{display:none!important;}",
+    "html.kabi-on #vinyl-page-container [class*='LyricContribule']>.tip,",
+    "html.kabi-on #vinyl-page-container [class*='LyricOperator'],",
+    "html.kabi-on #vinyl-page-container img[src*='vinyl/disc'],",
+    "html.kabi-on #vinyl-page-container img[src*='vinyl/outline'],",
+    "html.kabi-on #vinyl-page-container .cover-container-rotate>.CenterImg_c1feg9h6:not([class*='Cover_']){display:none!important;}",
+    "html.kabi-on #vinyl-page-container .page-header .right>button,",
+    "html.kabi-on #vinyl-page-container .page-header [class*='WindowOpBar']{display:none!important;}",
     "html.kabi-on #vinyl-page-container .page-header{z-index:40!important;}",
     "html.kabi-on #vinyl-page-container .page-header .close{pointer-events:auto!important;}",
-    "html.kabi-on .should-hide-under-vinyl-mode{visibility:hidden!important;}",
-    "html.kabi-on .cover-area,html.kabi-on [class*='VinylCoverContainer'],html.kabi-on .cover-container{opacity:0!important;visibility:hidden!important;pointer-events:none!important;}",
+    // Host owns the underlay lifecycle: its vinyl-mode is cleared at opening/closing.
+    // Never hide .should-hide-under-vinyl-mode here: that outlives the host transition
+    // and blanks the exposed page until fully closed (LAYOUT90 baseline43/43 frames).
+    "html.kabi-on #vinyl-page-container .cover-area,html.kabi-on #vinyl-page-container [class*='VinylCoverContainer'],html.kabi-on #vinyl-page-container .cover-container{opacity:0!important;visibility:hidden!important;pointer-events:none!important;}",
     // Shadow endpoints recovered from MediaCoreUI; CSS blur mapping/crossfade is a reconstruction.
     "#kabi-art{position:fixed;z-index:20;isolation:isolate;overflow:visible;border-radius:12px;pointer-events:none;transform-origin:center center;transition:left .65s cubic-bezier(.22,1,.36,1),top .65s cubic-bezier(.22,1,.36,1),width .65s cubic-bezier(.22,1,.36,1),height .65s cubic-bezier(.22,1,.36,1);}",
     "#kabi-art .art-shadow{position:absolute;inset:0;border-radius:inherit;z-index:-1;}#kabi-art .shadow-expanded{box-shadow:0 16px 64px rgba(0,0,0,.45);}#kabi-art .shadow-paused{box-shadow:0 5.479452px 21.917808px rgba(0,0,0,.15);}",
     "#kabi-art .art-layer{position:absolute;inset:0;overflow:hidden;border-radius:inherit;}#kabi-art img{display:block;width:100%;height:100%;object-fit:cover;}#kabi-art::after{content:'';position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 var(--kabi-hairline,1px) rgba(0,0,0,.08);z-index:3;}",
-    "html.kabi-on .CoverAnimationCls,",
-    "html.kabi-on .cover-container-rotate,",
-    "html.kabi-on [class*='Cover_c1l42i2x'],",
-    "html.kabi-on [class*='Cover_c1l42i2x'] img{width:100%!important;height:100%!important;animation:none!important;transform:none!important;border-radius:12px!important;object-fit:cover!important;}",
+    "html.kabi-on #vinyl-page-container .CoverAnimationCls,",
+    "html.kabi-on #vinyl-page-container .cover-container-rotate,",
+    "html.kabi-on #vinyl-page-container [class*='Cover_c1l42i2x'],",
+    "html.kabi-on #vinyl-page-container [class*='Cover_c1l42i2x'] img{width:100%!important;height:100%!important;animation:none!important;transform:none!important;border-radius:12px!important;object-fit:cover!important;}",
     // Control column geometry is transcribed from the reference frame: the stack is exactly
     // one playing-art width, centred on the artwork, and every offset below is the measured
     // Apple value at the 1512x949 reference window divided by --u (= artwork / 423.4).
@@ -226,26 +445,34 @@
     // / 346.5 from the column's left edge over a 361.5 column.  The accessory pair is flush --
     // shuffle's box starts at the column's left edge, repeat's ends at its right.
     //
-    // The glyph sizes are the ones already rendering here, frozen as points.  The boxes are
-    // Apple's; the marks inside them have not been measured yet, and scaling a mark to its box
-    // would make prev a 48pt triangle.
+    // Keep AX hit geometry independent of ink size. Play/pause and previous/next ink bounds
+    // now follow the measured v87/v88 captures below; shuffle/repeat retain earlier geometry.
+    // A 48pt hit box must never turn the previous glyph into a48pt triangle.
     "#kabi-transport{position:relative;height:48px;margin-top:10px;}",
     "#kabi-transport button{position:absolute;top:50%;padding:0;border:0;background:transparent;color:rgba(255,255,255,.82);display:grid;place-items:center;cursor:pointer;transform:translate(-50%,-50%);}",
     "#kabi-transport button svg{display:block;width:auto;}",
     "#kabi-transport [data-role='shuffle']{left:4.148%;width:30px;height:30px;}#kabi-transport [data-role='shuffle'] svg{height:13.7px;}",
-    "#kabi-transport [data-role='prev']{left:26.28%;width:48px;height:48px;}#kabi-transport [data-role='prev'] svg{height:16.2px;}",
-    "#kabi-transport [data-role='play']{left:50.069%;width:28px;height:28px;color:#fff;}#kabi-transport [data-role='play'] svg{height:23.1px;}",
-    "#kabi-transport [data-role='next']{left:73.858%;width:48px;height:48px;}#kabi-transport [data-role='next'] svg{height:16.2px;}",
+    "#kabi-transport [data-role='prev']{left:26.28%;width:48px;height:48px;}#kabi-transport [data-role='prev'] .skip-glyph{transform:scaleX(-1);}",
+    // APPLE-TRANSPORT87.mov: 2px/pt, stable ink play48x54px / pause42x55px.
+    // Hit box remains the AX-measured28x28pt. Do not scale this with the artwork column.
+    "#kabi-transport [data-role='play']{left:50.069%;width:28px;height:28px;color:#fff;}",
+    "#kabi-transport [data-role='play'] svg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);transform-origin:center;pointer-events:none;}",
+    "#kabi-transport [data-role='play'] svg[data-glyph='play']{width:24px;height:27px;}",
+    "#kabi-transport [data-role='play'] svg[data-glyph='pause']{width:21px;height:27.5px;}",
+    "#kabi-transport [data-role='next']{left:73.858%;width:48px;height:48px;}",
     "#kabi-transport [data-role='repeat']{left:95.851%;width:30px;height:30px;}#kabi-transport [data-role='repeat'] svg{height:13.2px;}",
+    // APPLE-SKIP88.mov: stable two-arrow ink66x38px at2px/pt; AX hit boxes remain48pt.
+    "#kabi-transport .skip-glyph{position:relative;display:block;width:33px;height:19px;color:#fff;opacity:.7;pointer-events:none;}",
+    "#kabi-transport .skip-glyph svg{position:absolute;left:0;top:0;width:16.5px;height:19px;transform-origin:8.25px 9.5px;}",
     "#kabi-transport button.on{color:#fff;}",
-    "html.kabi-on .page-footer{position:fixed!important;left:-3200px!important;top:0!important;width:320px!important;opacity:0!important;pointer-events:none!important;}",
-    "html.kabi-on #page_pc_mini_bar,",
-    "html.kabi-on .page-footer [class*='SpaceWrap']{width:100%!important;height:auto!important;background:transparent!important;}",
-    "html.kabi-on .page-footer [class*='SpaceContainer']{width:100%!important;height:auto!important;display:block!important;}",
-    "html.kabi-on .vinyl-page-bar-wrapper{width:100%!important;height:auto!important;min-height:0!important;padding:0!important;background:transparent!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;display:block!important;}",
-    "html.kabi-on .vinyl-page-bar-wrapper>.side{display:none!important;}",
-    "html.kabi-on .vinyl-page-bar-wrapper .middle{width:100%!important;height:auto!important;display:flex!important;justify-content:space-between!important;align-items:center!important;}",
-    "html.kabi-on .vinyl-page-bar-wrapper .middle button:has(.cmd-icon-playlist){display:none!important;}",
+    "html.kabi-on #vinyl-page-container .page-footer{position:fixed!important;left:-3200px!important;top:0!important;width:320px!important;opacity:0!important;pointer-events:none!important;}",
+    "html.kabi-on #vinyl-page-container #page_pc_mini_bar,",
+    "html.kabi-on #vinyl-page-container .page-footer [class*='SpaceWrap']{width:100%!important;height:auto!important;background:transparent!important;}",
+    "html.kabi-on #vinyl-page-container .page-footer [class*='SpaceContainer']{width:100%!important;height:auto!important;display:block!important;}",
+    "html.kabi-on #vinyl-page-container .vinyl-page-bar-wrapper{width:100%!important;height:auto!important;min-height:0!important;padding:0!important;background:transparent!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;display:block!important;}",
+    "html.kabi-on #vinyl-page-container .vinyl-page-bar-wrapper>.side{display:none!important;}",
+    "html.kabi-on #vinyl-page-container .vinyl-page-bar-wrapper .middle{width:100%!important;height:auto!important;display:flex!important;justify-content:space-between!important;align-items:center!important;}",
+    "html.kabi-on #vinyl-page-container .vinyl-page-bar-wrapper .middle button:has(.cmd-icon-playlist){display:none!important;}",
     // ---------------------------------------------------------------------
     // Apple's Now Playing footer control, measured rather than drawn by eye.
     //
@@ -306,8 +533,8 @@
     // shadow to reproduce.  Its box is (756,88,696,861) from the AX headerContainer rect; the
     // toggle pills are drawn inside it at y=88.5..124.5 and the row stack runs to the window's
     // bottom edge, which is why the box is 861 tall and not the full 949.
-    "html.kabi-on .kabi-queue{position:fixed;left:50%;right:60px;top:88px;bottom:0;z-index:5;overflow:visible;will-change:opacity;}",
-    "html.kabi-on .kabi-queue *{box-sizing:border-box;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue{position:fixed;left:50%;right:60px;top:88px;bottom:0;z-index:5;overflow:visible;will-change:opacity;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue *{box-sizing:border-box;}",
     // Pills: two 334x37 capsules 10pt apart with 9pt of panel inset on each side, drawn a little
     // shorter than their AX hit boxes (88.5..124.5 against 87..125) and fully rounded -- the
     // top-left corner profile comes in over the first 3pt and is straight by 4pt, which is a
@@ -319,20 +546,20 @@
     // for a 10pt gap and 9pt margins, so the pair sat wider and tighter than Apple's.
     // The fill is opaque, measured rgb (209, 208, 204): the mark's holes show the pill, not the
     // album wash, which is what lets both glyphs be plain unfilled circles.
-    "html.kabi-on .kabi-queue .pill{position:absolute;top:.5px;height:36px;border-radius:18px;background:#d1d0cc;color:rgba(0,0,0,.85);font:500 13px/36px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;text-align:center;letter-spacing:0;}",
-    "html.kabi-on .kabi-queue .pill.autoplay{left:13px;width:calc(50% - 21.75px);}",
-    "html.kabi-on .kabi-queue .pill.automix{left:calc(50% + 8.75px);width:calc(50% - 21.75px);}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .pill{position:absolute;top:.5px;height:36px;border-radius:18px;background:#d1d0cc;color:rgba(0,0,0,.85);font:500 13px/36px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;text-align:center;letter-spacing:0;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .pill.autoplay{left:13px;width:calc(50% - 21.75px);}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .pill.automix{left:calc(50% + 8.75px);width:calc(50% - 21.75px);}",
     // Section header.  Both lines are inset 17pt -- aligned to the artwork column, not to the
     // row text at 62pt.  Sizes come from ink extents: 14.36pt of cap-to-descender on a line with
     // both gives 15pt, 12.10pt gives 13pt.  Alphas are the same solve as the pill.
-    "html.kabi-on .kabi-queue .secTitle{position:absolute;left:17px;top:46.5px;font:600 15px/18px -apple-system,BlinkMacSystemFont,'SF Pro Display','Helvetica Neue',sans-serif;color:rgba(255,255,255,.94);white-space:nowrap;}",
-    "html.kabi-on .kabi-queue .secSub{position:absolute;left:17px;top:66.5px;font:400 13px/16px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;color:rgba(255,255,255,.63);white-space:nowrap;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .secTitle{position:absolute;left:17px;top:46.5px;font:600 15px/18px -apple-system,BlinkMacSystemFont,'SF Pro Display','Helvetica Neue',sans-serif;color:rgba(255,255,255,.94);white-space:nowrap;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .secSub{position:absolute;left:17px;top:66.5px;font:400 13px/16px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;color:rgba(255,255,255,.63);white-space:nowrap;}",
     // The section rule is the one divider that runs the full panel: measured x 756.00..1451.52
     // against a panel of 756..1452, so it is not inset like the row rules are.  1px at alpha .10
     // against its own local backdrop -- and it sits exactly on the first row's top edge, which is
     // why the row stack starts here.
-    "html.kabi-on .kabi-queue .rule{position:absolute;left:0;width:100%;height:1px;background:rgba(255,255,255,.10);}",
-    "html.kabi-on .kabi-queue .rule.top{top:92.5px;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .rule{position:absolute;left:0;width:100%;height:1px;background:rgba(255,255,255,.10);}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .rule.top{top:92.5px;}",
     // Rows.  48pt pitch, taken from the artwork centres and the "..." blobs three rows apart
     // (204.9, 252.6, 301.0 -> 48.05), not from the AX row height: the 44pt AXRow measured is the
     // History section's own header row, which is a different kind of row and not the song list.
@@ -343,13 +570,13 @@
     // the panel runs off the bottom of the window, so the list is clipped by the window edge at
     // 949 and the box is 949-181 = 768.  At 792 it ran 24pt past the bottom and the last row was
     // cut by the window rather than by the panel.
-    "html.kabi-on .kabi-queue .scroller{position:absolute;left:0;top:93px;width:100%;bottom:0;overflow-y:auto;overflow-x:hidden;will-change:transform;}",
-    "html.kabi-on .kabi-queue .rows{position:relative;width:100%;}",
-    "html.kabi-on .kabi-queue .row{position:absolute;left:0;width:100%;height:48px;}",
-    "html.kabi-on .kabi-queue .row .art{position:absolute;left:17px;top:7px;width:34px;height:34px;border-radius:5px;background-size:cover;background-position:center;}",
-    "html.kabi-on .kabi-queue .row .tx{position:absolute;left:62px;top:8.5px;width:calc(100% - 136px);}",
-    "html.kabi-on .kabi-queue .row .t1{display:block;font:600 13px/16px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;color:rgba(255,255,255,.96);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
-    "html.kabi-on .kabi-queue .row .t2{display:block;font:400 11px/13px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;color:rgba(255,255,255,.61);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .scroller{position:absolute;left:0;top:93px;width:100%;bottom:0;overflow-y:auto;overflow-x:hidden;will-change:transform;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .rows{position:relative;width:100%;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row{position:absolute;left:0;width:100%;height:48px;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row .art{position:absolute;left:17px;top:7px;width:34px;height:34px;border-radius:5px;background-size:cover;background-position:center;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row .tx{position:absolute;left:62px;top:8.5px;width:calc(100% - 136px);}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row .t1{display:block;font:600 13px/16px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;color:rgba(255,255,255,.96);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row .t2{display:block;font:400 11px/13px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',sans-serif;color:rgba(255,255,255,.61);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
     // The trailing ellipsis: three ~2.6pt dots on 3.5pt centres, centred at x=1413, alpha .59.
     // The row's "..." re-measured off Apple's own pixels at 2 device px per point, six rows deep in
     // the live Up Next queue (Apple window 1291x949 at origin 0,33; rows captured from screen
@@ -365,17 +592,17 @@
     // than a tinted one, and .193 is the mean.  On hover the ink is NOT neutral: measured at
     // .313 red against .066 green and .125 blue on two different rows, i.e. the artwork's own
     // colour, so hover takes the accent sampleColor already computes instead of a fixed tint.
-    "html.kabi-on .kabi-queue .row .more{position:absolute;right:31px;top:50%;width:13px;height:2px;margin-top:-1px;color:rgba(255,255,255,.193);background-image:radial-gradient(circle 1px at 1px 1px,currentColor 99%,transparent),radial-gradient(circle 1px at 6.5px 1px,currentColor 99%,transparent),radial-gradient(circle 1px at 12px 1px,currentColor 99%,transparent);transition:color .12s ease;}",
-    "html.kabi-on .kabi-queue .row:hover .more{color:var(--kabi-accent,rgba(255,255,255,.85));}",
-    "html.kabi-on .kabi-queue .row .rule2{position:absolute;left:62px;right:16px;height:1px;top:47px;background:rgba(255,255,255,.11);}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row .more{position:absolute;right:31px;top:50%;width:13px;height:2px;margin-top:-1px;color:rgba(255,255,255,.193);background-image:radial-gradient(circle 1px at 1px 1px,currentColor 99%,transparent),radial-gradient(circle 1px at 6.5px 1px,currentColor 99%,transparent),radial-gradient(circle 1px at 12px 1px,currentColor 99%,transparent);transition:color .12s ease;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row:hover .more{color:var(--kabi-accent,rgba(255,255,255,.85));}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .row .rule2{position:absolute;left:62px;right:16px;height:1px;top:47px;background:rgba(255,255,255,.11);}",
     // The overlay scrollbar is Apple's own: a 6pt indicator at x=1443..1449, the width the AX
     // value indicator reports, drawn over the rules rather than in a gutter.
-    "html.kabi-on .kabi-queue .bar{position:absolute;right:3px;width:6px;border-radius:3px;background:rgba(255,255,255,.28);pointer-events:none;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .bar{position:absolute;right:3px;width:6px;border-radius:3px;background:rgba(255,255,255,.28);pointer-events:none;}",
     // The floating globe straddles the panel's right edge: 54pt across, centred at (1468,267),
     // so 11pt of it sits outside the panel at x=1452 and its right edge stops 17pt short of the
     // window's.  It is Apple's cross-device control and has no NetEase counterpart, so it is
     // drawn for the layout and takes no clicks.
-    "html.kabi-on .kabi-queue .globe{position:absolute;right:-43px;top:152px;width:54px;height:54px;border-radius:27px;background:rgba(0,0,0,.72);pointer-events:none;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue .globe{position:absolute;right:-43px;top:152px;width:54px;height:54px;border-radius:27px;background:rgba(0,0,0,.72);pointer-events:none;}",
     // Apple's queue cross-fades; it does not slide.  Measured off its own toggle with a 20pt
     // band across the AutoPlay pill at 120Hz while pressing it by AX: the pill's text edge never
     // moves (2.5pt at most across a 696pt travel) while the band's rigid signal rises, and the
@@ -394,9 +621,9 @@
     //
     // The destination state's transition is the one that runs, so the base rule carries the
     // close curve and the open rule overrides it.
-    "html.kabi-on .kabi-queue{transition:opacity .105s cubic-bezier(.757,.188,.283,.676);}",
-    "html.kabi-on.kabi-sheet-open .kabi-queue{opacity:1!important;pointer-events:auto!important;transition:opacity .228s cubic-bezier(.453,.298,.505,.735);}",
-    "html.kabi-on.kabi-sheet-closed .kabi-queue{opacity:0!important;pointer-events:none!important;}",
+    "html.kabi-on #vinyl-page-container .kabi-queue{transition:opacity .105s cubic-bezier(.757,.188,.283,.676);}",
+    "html.kabi-on.kabi-sheet-open #vinyl-page-container .kabi-queue{opacity:1!important;pointer-events:auto!important;transition:opacity .228s cubic-bezier(.453,.298,.505,.735);}",
+    "html.kabi-on.kabi-sheet-closed #vinyl-page-container .kabi-queue{opacity:0!important;pointer-events:none!important;}",
     // How fast the lyric column clears, measured rather than assumed: a band over Apple's lyric
     // text, with its queue button pressed by AX, steps down 94.4 -> 83.6 luminance and is 90% of
     // the way there within 33ms, with the frames in between at 0.16 and 0.53 -- half gone at 25ms.
@@ -404,16 +631,16 @@
     // bounds it from below and above only to roughly 40-70ms; what it does rule out is anything
     // in the hundreds of milliseconds.  The travel is left as it was -- displacement was not
     // measured, so it stays where the earlier pass had it rather than gaining an invented number.
-    "html.kabi-on.kabi-lyrics-off .display{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transform:translateX(24px);transition:opacity .06s ease,transform .06s cubic-bezier(.22,1,.36,1),visibility 0s .06s;}",
-    "html.kabi-on .display{display:flex!important;align-items:stretch!important;padding:0!important;box-sizing:border-box!important;background:transparent!important;opacity:1;visibility:visible;transform:translateX(0);transition:opacity .35s .12s ease,transform .65s cubic-bezier(.22,1,.36,1),visibility 0s;}",
-    "html.kabi-on [class*='TrackDisplayContainer'],",
-    "html.kabi-on .area.lyric-mode,",
-    "html.kabi-on [class*='LyricDisplayInnerContainer']{width:100%!important;height:100%!important;max-height:none!important;margin:0!important;padding:0!important;background:transparent!important;}",
-    "html.kabi-on ul.lyric,",
+    "html.kabi-on.kabi-lyrics-off #vinyl-page-container .display{opacity:0!important;visibility:hidden!important;pointer-events:none!important;transform:translateX(24px);transition:opacity .06s ease,transform .06s cubic-bezier(.22,1,.36,1),visibility 0s .06s;}",
+    "html.kabi-on #vinyl-page-container .display{position:fixed!important;left:var(--kabi-display-left)!important;top:var(--kabi-display-top)!important;width:var(--kabi-display-width)!important;max-width:var(--kabi-display-width)!important;height:var(--kabi-display-height)!important;min-height:var(--kabi-display-height)!important;max-height:var(--kabi-display-height)!important;margin:0!important;z-index:20!important;display:flex!important;align-items:stretch!important;padding:0!important;box-sizing:border-box!important;background:transparent!important;opacity:1;visibility:visible;transform:translateX(0);transition:opacity .35s .12s ease,transform .65s cubic-bezier(.22,1,.36,1),visibility 0s;}",
+    "html.kabi-on #vinyl-page-container [class*='TrackDisplayContainer'],",
+    "html.kabi-on #vinyl-page-container .area.lyric-mode,",
+    "html.kabi-on #vinyl-page-container [class*='LyricDisplayInnerContainer']{width:100%!important;height:100%!important;max-height:none!important;margin:0!important;padding:0!important;background:transparent!important;}",
+    "html.kabi-on #vinyl-page-container ul.lyric,",
     "html.kabi-on #vinyl-page-container *{scrollbar-width:none!important;}",
-    "html.kabi-on ul.lyric::-webkit-scrollbar,",
+    "html.kabi-on #vinyl-page-container ul.lyric::-webkit-scrollbar,",
     "html.kabi-on #vinyl-page-container *::-webkit-scrollbar{width:0!important;height:0!important;display:none!important;}",
-    "html.kabi-on ul.lyric{mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 86%,transparent 100%);-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 86%,transparent 100%);}",
+    "html.kabi-on #vinyl-page-container ul.lyric{mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 86%,transparent 100%);-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 86%,transparent 100%);}",
     // Room for the unfocused-line blur, without moving a single glyph. Both .display and ul.lyric
     // clip, and both sat at exactly x=776.5, which is also where the first glyph's ink begins -- so
     // a 2.5px blur put its left tail outside the clip and every line got a dead-straight vertical
@@ -424,8 +651,8 @@
     // one that can move: margin-left:-8px with padding-left:8px puts its clip edge at 768.5 while
     // the line boxes stay at 776.5. Content width is pinned to the original 516.5 (100% - 6px of
     // the unchanged 522.5 parent) so no line re-wraps and no line box changes width.
-    "html.kabi-on .display{overflow:visible!important;}",
-    "html.kabi-on ul.lyric{box-sizing:content-box!important;margin-left:-8px!important;width:calc(100% - 6px)!important;padding-left:8px!important;}",
+    "html.kabi-on #vinyl-page-container .display{overflow:visible!important;}",
+    "html.kabi-on #vinyl-page-container ul.lyric{box-sizing:content-box!important;margin-left:-8px!important;width:calc(100% - 6px)!important;padding-left:8px!important;}",
     // Apple's unfocused lyric lines are genuinely defocused, not merely dimmed. Measured off a
     // 2x Apple capture by fitting a Gaussian to the steepest mid-level slope of a glyph stem
     // (which opacity cannot change, being a scalar): the focused line gives sigma .84 device px,
@@ -436,12 +663,17 @@
     // standard deviation and the fit returns a sigma. Not transitioned: Apple switches sharpness
     // in the same instant the line takes focus, and a transitioned filter spends a third of a
     // second at an intermediate sigma that Apple never shows.
-    "html.kabi-on ul.lyric li.line{opacity:.3;filter:blur(2.5px)!important;font-size:calc(34px * var(--kabi-type,1))!important;font-weight:650!important;letter-spacing:-.035em!important;line-height:1.2!important;text-align:left!important;transform-origin:left center;transition:opacity .2s cubic-bezier(.4,0,1,1);}",
-    "html.kabi-on ul.lyric li.line p{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif!important;font-size:inherit!important;font-weight:inherit!important;line-height:inherit!important;letter-spacing:inherit!important;color:#fff!important;}",
-    "html.kabi-on ul.lyric li.line p:empty{display:none!important;}",
-    "html.kabi-on ul.lyric li.line p+p{font-size:.55em!important;line-height:1.4!important;margin-top:.4em!important;opacity:.65;}",
-    "html.kabi-on ul.lyric li.line[data-kabi='2']{opacity:.42;}",
-    "html.kabi-on ul.lyric li.line[data-kabi='1']{opacity:.64;}",
+    "html.kabi-on #vinyl-page-container ul.lyric li.line{opacity:.3;filter:var(--reapple-lyric-blur,blur(2.5px))!important;font-size:calc(34px * var(--kabi-type,1))!important;font-weight:650!important;letter-spacing:-.035em!important;line-height:1.2!important;text-align:left!important;transform-origin:left center;transition:opacity .2s cubic-bezier(.4,0,1,1);}",
+    // User-requested Apple browsing semantics; ordinary playback still defocuses other lines.
+    "html.kabi-on #vinyl-page-container ul.lyric.reapple-lyric-hover li.line:hover{--reapple-lyric-blur:none;}",
+    "html.kabi-on #vinyl-page-container ul.lyric.reapple-lyric-browsing{--reapple-lyric-blur:none;}",
+    // Native selectedTime seek indicator (HOST-mode72 Xt); not the playback timer.
+    "html.kabi-on #vinyl-page-container .ScrollableLyricDisplayContainer_spqfaoe{display:none!important;}",
+    "html.kabi-on #vinyl-page-container ul.lyric li.line p{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif!important;font-size:inherit!important;font-weight:inherit!important;line-height:inherit!important;letter-spacing:inherit!important;color:#fff!important;}",
+    "html.kabi-on #vinyl-page-container ul.lyric li.line p:empty{display:none!important;}",
+    "html.kabi-on #vinyl-page-container ul.lyric li.line p+p{font-size:.55em!important;line-height:1.4!important;margin-top:.4em!important;opacity:.65;}",
+    "html.kabi-on #vinyl-page-container ul.lyric li.line[data-kabi='2']{opacity:.42;}",
+    "html.kabi-on #vinyl-page-container ul.lyric li.line[data-kabi='1']{opacity:.64;}",
     // The two ends of the hand-off are timed apart on purpose. A line leaving focus takes state '1'
     // and drops out over 200ms; a line entering focus takes state '0' and only starts 90ms later,
     // running 320ms. Timing them together is what made focus look like it dissolved between the two
@@ -449,7 +681,7 @@
     // filter:none on the focused line is the whole focus effect: the only thing separating Apple's
     // focused line from the rest is that it is the one line at sigma 0, and the transition list
     // names opacity alone so the blur cuts at the same instant the line starts brightening.
-    "html.kabi-on ul.lyric li.line[data-kabi='0']{opacity:1;filter:none!important;transition:opacity .32s cubic-bezier(.22,1,.36,1) .09s;}",
+    "html.kabi-on #vinyl-page-container ul.lyric li.line[data-kabi='0']{opacity:1;filter:none!important;transition:opacity .32s cubic-bezier(.22,1,.36,1) .09s;}",
     // Host slider restyled to the reference rail; its own seek handlers and width are preserved.
     // 22.7u is measured from the reference: artist ink bottom (664.0) to rail top (686.5).
     //
@@ -479,7 +711,7 @@
     // no such state; both are deleted rather than tuned.
     "html.kabi-on #vinyl-page-container #kabi-stack .bar .slider-vinyl .hotzone-overlay{position:absolute!important;left:0!important;top:-12px!important;width:100%!important;height:30px!important;cursor:default!important;z-index:5!important;}",
     "html.kabi-on #vinyl-page-container #kabi-times{margin-top:6.5px!important;font-size:11px!important;line-height:13px!important;color:rgba(255,255,255,.5)!important;}html.kabi-on #vinyl-page-container #kabi-times .quality,html.kabi-on #vinyl-page-container #kabi-times .quality *{font-size:11px!important;line-height:13px!important;}",
-    "@media(prefers-reduced-motion:reduce){#kabi-art,#kabi-stack,html.kabi-on .display,html.kabi-on.kabi-lyrics-off .display,html.kabi-on ul.lyric li.line,#kabi-bg,#kabi-bg .zoom,#kabi-bg .zoom canvas,#kabi-art .art-layer{transition:none!important;animation:none!important;}#kabi-stack .pop i{animation:none!important;}}"
+    "@media(prefers-reduced-motion:reduce){#kabi-art,#kabi-stack,html.kabi-on #vinyl-page-container .display,html.kabi-on.kabi-lyrics-off #vinyl-page-container .display,html.kabi-on #vinyl-page-container ul.lyric li.line,#kabi-bg,#kabi-bg .zoom,#kabi-bg .zoom canvas,#kabi-art .art-layer{transition:none!important;animation:none!important;}#kabi-stack .pop i{animation:none!important;}}"
 
   ].join("");
 
@@ -495,6 +727,19 @@
   switchStyle.id = "kabi-switch-style";
   switchStyle.textContent = hideCss(cfg);
   document.documentElement.appendChild(switchStyle);
+  var settingsStyle = document.createElement("style");
+  settingsStyle.id = "reapple-settings-style";
+  // These are manager-only visibility rules. Typography/controls/spacing are the host's
+  // live classes, not Apple/player overrides; no account/settings values are copied.
+  settingsStyle.textContent = "#page_pc_setting main[data-reapple-settings-open] > section:not(#reapple-settings-panel){display:none!important;}" +
+    "#reapple-settings-panel[hidden]{display:none!important;}" +
+    "#reapple-lyric-menu{font:menu;min-width:12em;padding:4px;border:1px solid ButtonBorder;border-radius:6px;background:Canvas;color:CanvasText;box-shadow:0 4px 16px #0002;}" +
+    "#reapple-lyric-menu button{display:block;width:100%;padding:8px 12px;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;}" +
+    "#reapple-lyric-menu button[aria-checked=true]{font-weight:600;}#reapple-lyric-menu button:hover:not(:disabled){background:Highlight;color:HighlightText;}#reapple-lyric-menu button:disabled{opacity:.45;cursor:default;}";
+  document.documentElement.appendChild(settingsStyle);
+  document.addEventListener("pointerdown", lyricMenuOutside, true);
+  document.addEventListener("keydown", lyricMenuKey);
+
   // The master switch is the one case where the page must not claim the html class at all: that
   // class is what suppresses the host's own vinyl chrome, so adding it with the master off would
   // leave NetEase with a blank page and nothing visible to show for it.  tick() re-adds it as soon
@@ -1042,9 +1287,10 @@
       if (stack.parentNode) stack.replaceWith(fresh);
       stack = fresh;
       stack._icons = ICONS;
+
       stack.querySelector("[data-role='shuffle']").innerHTML = ICONS.shuffle;
-      stack.querySelector("[data-role='prev']").innerHTML = ICONS.prev;
-      stack.querySelector("[data-role='next']").innerHTML = ICONS.next;
+      ensureSkipGlyph(stack.querySelector("[data-role='prev']"));
+      ensureSkipGlyph(stack.querySelector("[data-role='next']"));
       stack.querySelector("[data-role='play']").innerHTML = ICONS.play;
       stack.querySelector("[data-role='repeat']").innerHTML = ICONS.repeat;
       stack.setAttribute("data-icons", "sf2");
@@ -1066,8 +1312,8 @@
         // Chinese button titles, which are presentation and change between releases; the dva
         // actions above are the model's own contract.  star and more still click through, because
         // those have no action of their own -- they open host UI, which is what they should do.
-        if (role === "prev") { if (jumpTrack(-1)) return; }
-        if (role === "next") { if (jumpTrack(1)) return; }
+        if (role === "prev") { if (jumpTrack(-1)) { animateSkipGlyph(button, role); return; } }
+        if (role === "next") { if (jumpTrack(1)) { animateSkipGlyph(button, role); return; } }
         if (role === "play") { if (togglePlay()) return; }
         if (role === "star") target = buttonOf("[data-testid='tid_redstar_btn']");
         if (role === "more") target = buttonOf("[title='更多操作']");
@@ -1183,12 +1429,119 @@
     repeatBtn.setAttribute("aria-label", modeName === "playOneCycle" ? "单曲循环；点击关闭" : modeName === "playCycle" ? "列表循环；点击单曲循环" : "开启列表循环");
     var playing = isPlaying();
     var play = stack.querySelector("[data-role='play']");
-    var icon = playing ? stack._icons.pause : stack._icons.play;
-    if (play.getAttribute("data-icon") !== (playing ? "pause" : "play")) {
-      play.innerHTML = icon;
-      play.setAttribute("data-icon", playing ? "pause" : "play");
-    }
+    syncPlayGlyph(play, playing ? "pause" : "play");
     return stack;
+  }
+
+
+  // v87 — visually reconstructed from APPLE-TRANSPORT87.mov, NOT extracted Apple code.
+  // Source: Apple Music play<->pause AXPress; initial/final Play restored. 2 device px/pt.
+  // Irregular presentation samples (16.7–41.7ms), not a120fps timing claim. Tables replay
+  // measured relative scale/alpha; max incoming scale1.09; settled sample at550ms.
+  // Two-template least-squares fit: TRANSPORT87-FIT.json. Faint/occluded-layer scale is
+  // unobservable below .025 alpha, so hidden values are normalised rather than invented.
+  // This is shrink/replace/overshoot, not a path morph. Keep the actual host action intact.
+  var TRANSPORT_REPLACE = {"pause":[[0,1,1,0.1,0],[16.666,0.74,0.735,0.1,0],[33.333,0.57,0.574,0.16,0.05],[50.0,0.41,0.436,0.24,0.117],[66.666,0.3,0.255,0.35,0.289],[83.333,0.21,0.179,0.43,0.447],[100.0,0.14,0.071,0.53,0.531],[125.0,0.1,0,0.68,0.645],[141.666,0.1,0,0.76,0.732],[158.333,0.1,0,0.83,0.825],[183.333,0.1,0,0.92,0.92],[200.0,0.1,0,0.97,0.971],[216.666,0.1,0,1.01,1],[241.666,0.1,0,1.05,1],[258.333,0.1,0,1.07,1],[275.0,0.1,0,1.08,1],[291.666,0.1,0,1.09,1],[316.666,0.1,0,1.09,1],[333.333,0.1,0,1.09,1],[358.333,0.1,0,1.08,1],[375.0,0.1,0,1.07,1],[400.0,0.1,0,1.06,1],[416.666,0.1,0,1.04,1],[433.333,0.1,0,1.04,1],[450.0,0.1,0,1.03,1],[466.666,0.1,0,1.02,1],[483.333,0.1,0,1.02,1],[500.0,0.1,0,1.01,1],[516.666,0.1,0,1.01,0.998],[533.333,0.1,0,1.0,1],[550.0,0.1,0,1,1]],"play":[[0,0.1,0,1,1],[16.667,0.1,0,0.9,0.891],[33.334,0.1,0,0.73,0.695],[50.0,0.59,0.034,0.56,0.527],[66.667,0.25,0.164,0.41,0.412],[91.667,0.4,0.339,0.25,0.143],[108.334,0.49,0.413,0.17,0.087],[125.0,0.59,0.472,0.12,0.052],[141.667,0.68,0.534,0.1,0],[158.334,0.76,0.589,0.1,0],[175.0,0.84,0.638,0.1,0],[200.0,0.93,0.703,0.1,0],[216.667,0.97,0.752,0.1,0],[233.334,1.01,0.783,0.1,0],[258.334,1.05,0.831,0.1,0],[275.0,1.07,0.854,0.1,0],[291.667,1.08,0.877,0.1,0],[308.334,1.09,0.893,0.1,0],[333.334,1.09,0.918,0.1,0],[350.0,1.08,0.934,0.1,0],[366.667,1.08,0.943,0.1,0],[383.334,1.07,0.953,0.1,0],[400.0,1.06,0.962,0.1,0],[425.0,1.05,0.967,0.1,0],[441.667,1.04,0.977,0.1,0],[458.334,1.04,0.969,0.1,0],[475.0,1.03,0.975,0.1,0],[491.667,1.02,0.984,0.1,0],[508.334,1.01,0.985,0.1,0],[533.334,1.0,0.982,0.1,0],[550.0,1,1,0.1,0]]};
+
+  // v89: three-arrow hand-off, sampled separately for next and previous by native AXPress.
+  // APPLE-SKIP88.mov + SKIP88-FIT.json:234 presented frames; irregular16.7–50ms gaps.
+  // [ms, incoming(tx,scale,alpha), middle(...), outgoing(...)], x in painted points.
+  // The incoming grows, the middle translates one slot, the outgoing shrinks. Previous
+  // mirrors the canonical geometry but uses its independently sampled timing, not a guess.
+  // Existing reconstructed play contour reused; no Apple vector/binary asset redistributed.
+  var SKIP_REPLACE = {"next":[[0,-8.25,0,0,0,1,1,16.5,1,1],[50.0,-3.5,0.1,0.657,0.75,1.0,1,16.85,0.769,0.779],[66.666,-8.3,0.105,0.369,2.0,1.0,1,17.7,0.599,0.599],[83.333,-7.8,0.211,0.535,3.4,0.99,1,18.85,0.451,0.447],[100.0,-6.8,0.306,0.654,4.95,1.0,1,20.35,0.316,0.328],[125.0,-5.35,0.464,0.784,7.5,1.0,1,22.7,0.168,0.196],[141.666,-4.4,0.559,0.854,9.05,1.0,1,24.7,0,0],[158.333,-3.4,0.652,0.905,10.6,1.0,1,24.7,0,0],[175.0,-2.7,0.74,0.94,12.0,1.0,1,24.7,0,0],[191.666,-1.983,0.807,0.97,13.1,1.0,1,24.7,0,0],[216.666,-0.983,0.907,0.96,14.75,1.0,0.99,24.7,0,0],[233.333,-0.567,0.963,0.97,15.55,1.0,1,24.7,0,0],[250.0,0.0,1.0,0.98,16.2,1.0,0.98,24.7,0,0],[266.666,0.3,1.03,0.99,16.65,1.0,0.99,24.7,0,0],[283.333,0.6,1.06,0.99,17.1,1.0,0.99,24.7,0,0],[300.0,0.6,1.07,1,17.25,1.0,0.99,24.7,0,0],[316.666,0.6,1.07,1,17.55,1.0,0.99,24.7,0,0],[333.333,0.6,1.07,1,17.55,1.0,0.99,24.7,0,0],[350.0,0.6,1.07,1,17.55,1.0,0.99,24.7,0,0],[366.666,0.6,1.07,1,17.55,1.0,0.99,24.7,0,0],[383.333,0.6,1.07,1,17.55,1.0,1,24.7,0,0],[400.0,0.6,1.07,1,17.25,1.0,0.99,24.7,0,0],[416.666,0.6,1.07,0.99,17.25,1.0,0.99,24.7,0,0],[441.666,0.6,1.06,0.99,17.1,1.0,0.99,24.7,0,0],[458.333,0.3,1.04,1,16.95,1.0,1,24.7,0,0],[475.0,0.3,1.04,1,16.8,1.0,1,24.7,0,0],[491.666,0.15,1.02,1,16.65,1.0,0.99,24.7,0,0],[508.333,0.0,1.0,1,16.5,1.0,1,24.7,0,0],[525.0,0.0,1.0,1,16.5,1.0,1,24.7,0,0],[541.666,0.0,1.0,1,16.2,1.0,0.99,24.7,0,0],[558.333,0.0,1.0,1,16.2,1.0,0.99,24.7,0,0],[575.0,0.0,1.0,1,16.2,1.0,0.99,24.7,0,0],[600.0,-0.15,1.0,0.99,16.05,1.0,1,24.7,0,0],[616.666,-0.3,1.0,0.98,16.05,1.0,1,24.7,0,0],[633.333,-0.3,1.0,0.98,16.05,1.0,1,24.7,0,0],[650.0,-0.3,1.0,0.98,16.05,1.0,0.99,24.7,0,0],[666.666,-0.3,1.0,0.98,16.05,1.0,0.99,24.7,0,0],[683.333,-0.3,1.0,0.99,16.05,1.0,0.99,24.7,0,0],[700.0,0,1,1,16.5,1,1,33,0,0]],"prev":[[0,-8.25,0,0,0,1,1,16.5,1,1],[16.666,-6.434,0,0,0.35,1.0,1,16.55,0.915,0.887],[33.333,-4.667,0.273,0.208,1.3,1.0,1,17.1,0.747,0.726],[50.0,-11.15,0.148,0.459,2.4,1.0,1,18.15,0.569,0.55],[75.0,-9.35,0.283,0.73,4.65,1.0,1,20.05,0.352,0.336],[91.666,-7.95,0.378,0.824,6.35,1.0,1,21.55,0.251,0.227],[108.333,-6.6,0.484,0.879,7.9,1.0,1,22.983,0.167,0.157],[125.0,-5.35,0.579,0.932,9.45,1.0,1,24.523,0.108,0.108],[141.666,-4.2,0.674,0.942,11.0,1.0,1,24.4,0,0],[166.666,-2.6,0.789,0.99,12.95,1.0,0.99,24.4,0,0],[183.333,-1.7,0.852,1,14.2,1.0,1,24.4,0,0],[200.0,-0.95,0.92,1,15.15,1.0,1,24.4,0,0],[216.666,-0.384,0.967,1,15.8,1.0,1,24.4,0,0],[233.333,0.183,1.003,0.99,16.45,1.0,0.99,24.4,0,0],[250.0,0.6,1.04,1,16.95,1.0,0.99,24.4,0,0],[266.666,0.9,1.06,1,17.4,1.0,0.99,24.4,0,0],[283.333,1.1,1.07,1,17.7,1.0,1,24.4,0,0],[300.0,1.1,1.08,1,17.7,1.0,1,24.4,0,0],[325.0,1.25,1.09,0.99,17.85,1.0,0.99,24.4,0,0],[341.666,1.25,1.09,0.99,17.7,1.0,1,24.4,0,0],[358.333,1.1,1.08,1,17.7,1.0,1,24.4,0,0],[375.0,1.1,1.07,1,17.7,1.0,0.99,24.4,0,0],[391.666,0.9,1.07,0.99,17.4,1.0,0.99,24.4,0,0],[408.333,0.9,1.06,0.99,17.25,1.0,1,24.4,0,0],[425.0,0.75,1.05,1,17.25,1.0,1,24.4,0,0],[441.666,0.6,1.04,1,16.95,1.0,0.99,24.4,0,0],[458.333,0.45,1.03,1,16.95,1.0,1,24.4,0,0],[475.0,0.45,1.02,1,16.8,1.0,1,24.4,0,0],[500.0,0.3,1.01,1,16.8,1.0,0.99,24.4,0,0],[516.666,0.3,1.01,1,16.5,1.0,0.99,24.4,0,0],[533.333,0.15,0.99,1,16.5,1.0,0.99,24.4,0,0],[550.0,0.0,1.0,0.99,16.35,1.0,0.99,24.4,0,0],[566.666,0.0,1.0,0.99,16.35,1.0,0.99,24.4,0,0],[583.333,0.0,1.0,0.98,16.35,1.0,0.99,24.4,0,0],[608.333,0.0,1.0,0.98,16.2,1.0,1,24.4,0,0],[633.333,0.0,1.0,0.98,16.2,1.0,1,24.4,0,0],[650.0,0.0,1.0,0.99,16.2,1.0,1,24.4,0,0],[666.666,0.0,1.0,0.99,16.2,1.0,1,24.4,0,0],[683.333,0,1,1,16.5,1,1,33,0,0]]};
+  function settleSkipGlyph(button) {
+    if (!button) return;
+    button._kabiSkipRun = null;
+    var nodes = button.querySelectorAll(".skip-glyph svg");
+    [].forEach.call(nodes, function (node, i) {
+      node.getAnimations().forEach(function (a) { a.cancel(); });
+      node.style.opacity = i ? "1" : "0";
+      node.style.transform = "translateX(" + (i === 2 ? 16.5 : i === 1 ? 0 : -8.25) + "px) scale(" + (i ? 1 : 0) + ")";
+    });
+  }
+  function ensureSkipGlyph(button) {
+    if (!button || button.querySelectorAll(".skip-glyph svg").length === 3) return;
+    button.innerHTML = "<span class='skip-glyph' aria-hidden='true'>" + ICONS.play + ICONS.play + ICONS.play + "</span>";
+    [].forEach.call(button.querySelectorAll("svg"), function (node) {
+      node.setAttribute("aria-hidden", "true");
+      node.setAttribute("focusable", "false");
+      node.setAttribute("preserveAspectRatio", "none");
+    });
+    settleSkipGlyph(button);
+  }
+  function animateSkipGlyph(button, role) {
+    ensureSkipGlyph(button);
+    if (reducedMotion.matches) { settleSkipGlyph(button); return; }
+    var nodes = button.querySelectorAll(".skip-glyph svg");
+    if (!nodes.length || !nodes[0].animate) return;
+    var rows = SKIP_REPLACE[role], duration = rows[rows.length - 1][0];
+    var presentation = [].map.call(nodes, function (node) {
+      var css = getComputedStyle(node), matrix = new DOMMatrixReadOnly(css.transform);
+      return { x: matrix.e, scale: matrix.a, opacity: parseFloat(css.opacity) };
+    });
+    // Every accepted command executes immediately; fast presses replace the motion, not
+    // the command. Carry current presentation to prevent a reset-to-rest flash or a queue
+    // of stale effects. The measured single-press trajectory remains the normal case.
+    [].forEach.call(nodes, function (node) { node.getAnimations().forEach(function (a) { a.cancel(); }); });
+    var run = {};
+    button._kabiSkipRun = run;
+    var animations = [].map.call(nodes, function (node, i) {
+      var col = 1 + i * 3, initial = rows[0];
+      var frames = rows.map(function (row) {
+        var u = row[0] / duration, tail = 1 - u;
+        var x = row[col] + (presentation[i].x - initial[col]) * tail;
+        var scale = Math.max(0, row[col + 1] + (presentation[i].scale - initial[col + 1]) * tail);
+        var opacity = Math.max(0, Math.min(1, row[col + 2] + (presentation[i].opacity - initial[col + 2]) * tail));
+        return { offset: u, opacity: opacity, transform: "translateX(" + x + "px) scale(" + scale + ")" };
+      });
+      return node.animate(frames, { duration: duration, easing: "linear" });
+    });
+    animations[0].onfinish = function () {
+      if (!disposed && button._kabiSkipRun === run) settleSkipGlyph(button);
+    };
+  }
+
+  function syncPlayGlyph(button, kind) {
+    var previous = button.getAttribute("data-icon");
+    button.setAttribute("aria-label", kind === "pause" ? "暂停" : "播放");
+    var glyphs = button.querySelectorAll("svg[data-glyph]");
+    if (glyphs.length !== 2) {
+      button.innerHTML = ICONS.play + ICONS.pause;
+      glyphs = button.querySelectorAll("svg");
+      ["play", "pause"].forEach(function (name, i) {
+        glyphs[i].setAttribute("data-glyph", name);
+        glyphs[i].setAttribute("aria-hidden", "true");
+        glyphs[i].setAttribute("focusable", "false");
+        glyphs[i].setAttribute("preserveAspectRatio", "none");
+      });
+      previous = null; // First mount reflects host state immediately, never an entrance tween.
+    }
+    if (previous === kind && !reducedMotion.matches) return;
+    var presentation = [].map.call(glyphs, function (node) {
+      var style = getComputedStyle(node);
+      return { opacity: style.opacity, transform: style.transform };
+    });
+    // Retarget rapid reversals from the current presentation, not a stale endpoint.
+    [].forEach.call(glyphs, function (node) {
+      node.getAnimations().forEach(function (a) { a.cancel(); });
+    });
+    button.setAttribute("data-icon", kind);
+    [].forEach.call(glyphs, function (node, i) {
+      var visible = node.getAttribute("data-glyph") === kind;
+      node.style.opacity = visible ? "1" : "0";
+      node.style.transform = "translate(-50%,-50%) scale(" + (visible ? 1 : .1) + ")";
+      if (!previous || reducedMotion.matches || !node.animate) return;
+      var samples = TRANSPORT_REPLACE[kind];
+      var duration = samples[samples.length - 1][0];
+      var frames = samples.map(function (row) {
+        return { offset: row[0] / duration, opacity: row[2 + i * 2],
+          transform: "translate(-50%,-50%) scale(" + row[1 + i * 2] + ")" };
+      });
+      frames[0].opacity = presentation[i].opacity;
+      frames[0].transform = presentation[i].transform;
+      node.animate(frames, { duration: duration, easing: "linear" });
+    });
   }
 
   function syncHostPopups() {
@@ -1207,6 +1560,7 @@
     var x = Math.max(view.left, Math.min(box.left - .5, view.left + view.width - width));
     var y = box.top - 22 - height;
     if (y < view.top) y = Math.min(box.bottom + 22, view.top + view.height - height);
+    if (!popupStyles_.has(portal)) popupStyles_.set(portal, portal.getAttribute("style"));
     pin(portal, x, Math.max(view.top, y), width, null);
     if (portal.style.getPropertyValue("transform") !== "none") portal.style.setProperty("transform", "none", "important");
   }
@@ -1309,32 +1663,30 @@
     var root = document.getElementById("vinyl-page-container");
     var art = document.getElementById("kabi-art") || ensureArt();
     var stack = document.getElementById("kabi-stack") || ensureStack();
-    if (!root || !art || !stack) return;
+    if (!root || !stack) return;
     var b = stageBox();
     if (b.width < 200 || b.height < 200) return;
-    // Which column the artwork sits in follows the lyric segment's own state, not whether the
-    // lyric column happens to be on screen.  With the queue up Apple clears the column but leaves
-    // the artwork where it was, measured at centre x 378 in the reference with the sheet open, so
-    // reading the derived class here would slide the artwork to x 756 -- straight under the panel.
-    var off = !footLyricsOn();
+    // Either visible right-hand component reserves a column, independently of lyric preference.
+    // v87 only checked footLyricsOn(): with lyrics OFF, opening/playing a queue row kept the
+    // artwork and rail centred underneath the queue. The queue requires the left column too.
+    // Keep lyricsManualOn_ untouched: closing the queue must not switch the lyrics back on.
+    var off = !(cfg.lyrics && footLyricsOn()) && !(cfg.queue && footQueueOpen());
     var typeScale = Math.max(.82, Math.min(36 / 34, b.width / 1024)).toFixed(4);
     if (root.style.getPropertyValue("--kabi-type") !== typeScale) root.style.setProperty("--kabi-type", typeScale);
-    // Reference frame is 1512x949 CSS pt. Artwork box measured 309x309 at (223.5, 243), so its
-    // centre is (378, 397); the playing size is .28W = 423.36 and the paused frame shows the
-    // settled 0.73 scale of it. Rail centre x equals the artwork centre x, and the rail top
-    // sits at 686.5/949 of page height.
-    var size = b.width * .28;
+    // APPLE-LAYOUT90: AX at1291x949 /1512x949 /1512x800, paused+playing.
+    // Native (page-local) art top/height/title top:216/361.5/596.5,
+    // 185/423.5/627.5,110.5/423.5/553. Gap=19pt in every sample, unchanged by play.
+    // At2px/pt all samples fit snap((H-snap(.28W))/2 -78) with0pt residual.
+    // The old independently anchored596.5/949 title overlapped playing art by12.5pt
+    // at1512x949. Solve the coupled vertical stack from one snapped artwork box.
+    var pixel = window.devicePixelRatio || 1;
+    function snapPoint(value) { return Math.round(value * pixel) / pixel; }
+    var size = snapPoint(b.width * .28);
     var centerX = b.left + b.width * (off ? .5 : .25);
-    var centerY = b.top + b.height * (397 / 949);
     var left = centerX - size / 2;
-    var top = centerY - size / 2;
+    var top = snapPoint(b.top + (b.height - size) / 2 - 78);
+    var headTop = top + size + 19;
     var u = size / 423.4;
-    // The rail is anchored to Apple's song-info block, whose AX frame is 309.5 x 37.5 with its
-    // top at page y 596.5 of 949.  It used to be 686.5/949 of the page minus a 58.4u fudge for
-    // the head's height, so u entered twice: once through the fudge and once through every size
-    // below it.  Pinning the block's own top instead makes the two line boxes' baselines land on
-    // Apple's 612.4 and 629.1 on their own, and the rest of the column follows from the gaps.
-    var headTop = b.top + b.height * (596.5 / 949);
     if (stack.style.getPropertyValue("--u") !== u.toFixed(4)) stack.style.setProperty("--u", u.toFixed(4));
     // The footer is a sibling of the stack, not a descendant, so it does not inherit --u; every
     // calc() in its rules resolves against this copy.  Without it the capsule falls back to the
@@ -1343,14 +1695,19 @@
     if (footEl && footEl.style.getPropertyValue("--u") !== u.toFixed(4)) footEl.style.setProperty("--u", u.toFixed(4));
     var playingNow = isPlaying();
     document.documentElement.classList.toggle("kabi-paused", !playingNow);
-    art.classList.toggle("is-paused", !playingNow);
-    // Rail top 686.5/949 page height; the head block above it is 35.7u + 22.7u.
-    pin(art, left, top, size, size);
+    if (art) art.classList.toggle("is-paused", !playingNow);
+    // Keep rail/title and artwork coupled through headTop; font and internal row spacing stay absolute.
+    if (art) pin(art, left, top, size, size);
     pin(stack, left, headTop, size, null);
-    animateArtwork(art, playingNow);
-    if (display && !off) {
-      pin(display, b.left + b.width * (526 / 1024), b.top + b.height * (136 / 642), b.width * (354 / 1024), b.height * (411 / 642));
-    }
+    if (art) animateArtwork(art, playingNow);
+    // Never pin the host lyric column inline: those !important dimensions survive
+    // the master class being removed and push the native record into the lyric rail.
+    // Geometry lives only in scoped CSS; host inline sizing remains host-owned.
+    [["left", b.left + b.width * (526 / 1024)], ["top", b.top + b.height * (136 / 642)],
+     ["width", b.width * (354 / 1024)], ["height", b.height * (411 / 642)]].forEach(function (row) {
+      var key = "--kabi-display-" + row[0], value = snapPoint(row[1]) + "px";
+      if (root.style.getPropertyValue(key) !== value) root.style.setProperty(key, value);
+    });
   }
 
   function syncTimes() {
@@ -1808,6 +2165,7 @@
     if (!foot) return false;
     var queue = footQueueOpen();
     var lyrics = footLyricsOn();
+    foot.queue.disabled = !cfg.queue; foot.lyric.disabled = !cfg.lyrics;
     var state = queue ? "queue" : (lyrics ? "lyric" : "none");
     foot.queueOpen = queue;
     if (state === foot.state) return false;
@@ -1908,11 +2266,14 @@
       footSyncQueue();
     };
     foot.onQueue = function () {
+      if (!cfg.queue) return;
       if (footQueueOpen()) footSheetClose();
       else footSheetOpen();
       footSyncQueue();
     };
     foot.lyric.addEventListener("click", foot.onLyric);
+    foot.lyric.addEventListener("contextmenu", openLyricMenu);
+    foot.lyric.setAttribute("aria-description", "右键选择原文、翻译或罗马音");
     foot.queue.addEventListener("click", foot.onQueue);
     // Nothing watches the host for the queue any more.  The panel is ours and its state is ours;
     // the observer that used to watch .cmd-sidesheet-inner's class name had nothing left to watch
@@ -2073,18 +2434,33 @@
       seen = top;
     }
 
-    function scroll() { if (!frame) frame = requestAnimationFrame(renderScroll); }
+    function scroll() { if (performance.now() < manualUntil && list._reappleManualUntil) beginBrowsing(); if (!frame) frame = requestAnimationFrame(renderScroll); }
     list.addEventListener('scroll', scroll, { passive: true });
-    var release = function () { manualUntil = performance.now() + 1500; run = null; };
+    var browsingTimer = 0;
+    function beginBrowsing() {
+      // Reuse the pre-existing1500ms manual-scroll ownership window. This is a recovery
+      // policy, not a newly claimed Apple timing measurement. Native paused-scroll can
+      // retain browsing longer; the current-line autofocus path never enters this state.
+      list._reappleManualUntil = performance.now() + 1500;
+      clearTimeout(browsingTimer); syncLyricBrowsing(list);
+      browsingTimer = setTimeout(function () { list._reappleManualUntil = 0; if (!disposed) syncLyricBrowsing(list); }, 1500);
+    }
+    var release = function (event) { manualUntil = performance.now() + 1500; run = null; if (event.type !== "pointerdown") beginBrowsing(); };
+    var keyboardBrowse = function (event) { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].indexOf(event.key) >= 0) { manualUntil = performance.now() + 1500; run = null; beginBrowsing(); } };
+    list.addEventListener("keydown", keyboardBrowse);
     ['wheel', 'touchstart', 'pointerdown'].forEach(function (name) { list.addEventListener(name, release, { passive: true }); });
 
     list.scrollTo = function (arg) {
+      if (!cfg.playPage || !cfg.lyrics) return nativeScrollTo.apply(this, arguments);
       if (arg && typeof arg === 'object' && typeof arg.top === 'number') { settle(arg.top); return; }
       return nativeScrollTo.apply(this, arguments);
     };
 
     return function () {
       cancelAnimationFrame(frame);
+      clearTimeout(browsingTimer); list._reappleManualUntil = 0;
+      list.classList.remove("reapple-lyric-browsing", "reapple-lyric-hover");
+      list.removeEventListener("keydown", keyboardBrowse);
       run = null;
       list.removeEventListener('scroll', scroll);
       ['wheel', 'touchstart', 'pointerdown'].forEach(function (name) { list.removeEventListener(name, release); });
@@ -2092,10 +2468,18 @@
     };
   }
 
+  function syncLyricBrowsing(list) {
+    var store = hostStore_ || queueStore(), state = store && store.getState()["page:vinylPage"];
+    var hover = !!cfg.lyricHoverClear;
+    var browsing = !!cfg.lyricScrollClear && !!((state && state.isLyricPausedScroll) || performance.now() < (list._reappleManualUntil || 0));
+    if (list.classList.contains("reapple-lyric-hover") !== hover) list.classList.toggle("reapple-lyric-hover", hover);
+    if (list.classList.contains("reapple-lyric-browsing") !== browsing) list.classList.toggle("reapple-lyric-browsing", browsing);
+  }
   function tuneLyrics() {
     if (!cfg.lyrics) return;
     var list = document.querySelector("ul.lyric");
     if (!list) return;
+    syncLyricBrowsing(list);
     if (observedList !== list) {
       if (lyricObserver) lyricObserver.disconnect();
       if (lyricScrollCleanup) lyricScrollCleanup();
@@ -2132,6 +2516,7 @@
   var dirty = { all: true };
   var runtimeRoot = document.getElementById("vinyl-page-container");
   var lastOpen = false;
+  var lastLyricPreference_ = "";
   function bindHostStore() {
     var store = queueStore();
     if (!store || store === hostStore_) return;
@@ -2142,6 +2527,8 @@
       var state = store.getState();
       var page = state["page:vinylPage"] && state["page:vinylPage"].pageState;
       var mode = state.playing && state.playing.playingMode;
+      var lyricPreference = (state.setting && state.setting.lyricMode) + ":" + (state["page:vinylPage"] && state["page:vinylPage"].isLyricPausedScroll);
+      if (lyricPreference !== lastLyricPreference_) { lastLyricPreference_ = lyricPreference; schedule("all"); }
       if (page !== lastHostPage_) {
         lastHostPage_ = page;
         dirty.all = true;
@@ -2167,6 +2554,13 @@
     // The switches are re-read here rather than at boot, so a settings flip reaches the page on the
     // next frame without needing a reload or a version bump.
     cfg = CFG();
+    if (previousMaster_ && !cfg.playPage) {
+      returnNativeControls(); closeLyricMenu();
+      if (lyricScrollCleanup) { lyricScrollCleanup(); lyricScrollCleanup = null; observedList = null; }
+    }
+    previousMaster_ = cfg.playPage;
+    if (changes.all || changes.settings) syncSettingsPanel();
+    if (!cfg.queue && footQueueOpen()) footSheetClose();
     var h = hideCss(cfg);
     if (switchStyle.textContent !== h) switchStyle.textContent = h;
     var open = pageOpen() && cfg.playPage;
@@ -2192,6 +2586,8 @@
     records.forEach(function (record) {
       var node = record.target.nodeType === 1 ? record.target : record.target.parentElement;
       if (!node || node === document.documentElement) return;
+      if (node.closest("#reapple-settings-panel,#reapple-settings-tab,#reapple-lyric-menu")) return;
+      if (record.type === "childList" && !runtimeRoot.contains(node)) schedule("settings");
       if (node.closest("#kabi-bg,#kabi-art,#kabi-times")) return;
       if (node.closest("#kabi-stack")) {
         if (node.closest(".slider-vinyl .thumb, .slider-vinyl .track")) schedule("times");
@@ -2215,13 +2611,21 @@
     if (dirty.all && pageOpen()) tick();
     if (pageOpen()) syncHostPopups();
   }
+  function transportMotionChanged() {
+    var button = document.querySelector("#kabi-transport [data-role='play']");
+    if (button && reducedMotion.matches) syncPlayGlyph(button, isPlaying() ? "pause" : "play");
+    if (reducedMotion.matches) {
+      document.querySelectorAll("#kabi-transport [data-role='prev'],#kabi-transport [data-role='next']").forEach(settleSkipGlyph);
+    }
+    resized();
+  }
   function resized() { schedule("layout"); }
   function visibilityChanged() { if (!document.hidden) schedule("all"); }
   pageObserver = new MutationObserver(changed);
   pageObserver.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["src", "class", "style", "title"] });
   window.addEventListener("resize", resized, { passive: true });
   document.addEventListener("visibilitychange", visibilityChanged);
-  if (reducedMotion.addEventListener) reducedMotion.addEventListener("change", resized);
+  if (reducedMotion.addEventListener) reducedMotion.addEventListener("change", transportMotionChanged);
 
   if (window.__kabiTimer) clearInterval(window.__kabiTimer);
   // A settings flip must not require a reload, and the injector deliberately skips re-injection
@@ -2231,12 +2635,15 @@
   // so a live flip in either direction is a complete transition rather than a half-applied one.
   window.__kabiReconfigure = function () {
     if (disposed || window.__kabiStage !== STAGE_VERSION) return false;
-    cfg = CFG();
+    dirty.all = true;
     tick();
     return cfg;
   };
   window.__kabiStageDispose = function () {
     disposed = true;
+    disposeSettingsPanel(); closeLyricMenu();
+    document.removeEventListener("pointerdown", lyricMenuOutside, true);
+    document.removeEventListener("keydown", lyricMenuKey);
     if (hostUnsubscribe_) hostUnsubscribe_();
     hostUnsubscribe_ = null;
     hostStore_ = null;
@@ -2244,7 +2651,7 @@
     cancelAnimationFrame(scheduledRender);
     window.removeEventListener("resize", resized);
     document.removeEventListener("visibilitychange", visibilityChanged);
-    if (reducedMotion.removeEventListener) reducedMotion.removeEventListener("change", resized);
+    if (reducedMotion.removeEventListener) reducedMotion.removeEventListener("change", transportMotionChanged);
     if (coverMotion) cancelAnimationFrame(coverMotion.frame);
     rasterCache.clear();
     if (lyricScrollCleanup) lyricScrollCleanup();
@@ -2258,6 +2665,7 @@
     // the panel it opens all go here, so a rebuild starts from one clean reader.
     if (foot) {
       if (foot.onLyric) foot.lyric.removeEventListener("click", foot.onLyric);
+      foot.lyric.removeEventListener("contextmenu", openLyricMenu);
       if (foot.onQueue) foot.queue.removeEventListener("click", foot.onQueue);
       if (foot.wrap && foot.wrap.parentNode) foot.wrap.parentNode.removeChild(foot.wrap);
       foot = null;
@@ -2273,38 +2681,18 @@
     // closed, which is why it only showed up as odd leftovers rather than as a visible fault.
     // Return borrowed host controls before deleting the overlay. Keeping the original node
     // preserves React's listeners and playback state, and permits reinjection without a reload.
-    document.querySelectorAll("#kabi-stack .slider-vinyl").forEach(function (slider) {
-      var home = slider._kabiHome;
-      if (home && home.parent && home.parent.isConnected) {
-        home.parent.insertBefore(slider, home.next && home.next.parentNode === home.parent ? home.next : null);
-        delete slider._kabiHome;
-      }
-    });
-    borrowedControls_.forEach(function (el) {
-      var home = el._kabiControlHome;
-      if (home && home.parent && home.parent.isConnected && el.isConnected) {
-        home.parent.insertBefore(el, home.next && home.next.parentNode === home.parent ? home.next : null);
-      }
-      ["data-role", "aria-label"].forEach(function (attr) {
-        var value = home && home[attr === "data-role" ? "role" : "label"];
-        if (value == null) el.removeAttribute(attr); else el.setAttribute(attr, value);
-      });
-      el.removeAttribute("data-kabi-native");
-      el.style.removeProperty("--kabi-more-icon");
-      delete el._kabiControlHome;
-    });
-    borrowedControls_.clear();
+    returnNativeControls();
     ["kabi-bg", "kabi-art", "kabi-stack"].forEach(function (id) {
       var el = document.getElementById(id);
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
-    ["kabi-stage-style", "kabi-switch-style"].forEach(function (id) {
+    ["kabi-stage-style", "kabi-switch-style", "reapple-settings-style"].forEach(function (id) {
       var sheet = document.getElementById(id);
       if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet);
     });
     var probe = document.getElementById("kabi-stage-probe");
     if (probe && probe.parentNode) probe.parentNode.removeChild(probe);
-    document.documentElement.classList.remove("kabi-sheet-open", "kabi-sheet-closed", "kabi-lyrics-off", "kabi-paused");
+    document.documentElement.classList.remove("kabi-on", "kabi-sheet-open", "kabi-sheet-closed", "kabi-lyrics-off", "kabi-paused");
     stageProbe_ = null;
     delete window.__kabiReconfigure;
   };

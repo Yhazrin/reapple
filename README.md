@@ -135,9 +135,14 @@ are in the painted frame. Every layout number in the payload was measured in pai
 
 ### Layout under the replica
 
-The host hides its own chrome with `body.vinyl-mode` plus `content-visibility: hidden` on
-seven `.should-hide-under-vinyl-mode` nodes while the playback page is up, and restores all
-of it on the way out. `reapple` rides that rather than reimplementing it.
+The host owns `body.vinyl-mode` and its main-page `content-visibility` culling while
+fully open. The plugin no longer applies a global visibility blanket: the real main
+page remains painted during player entrance/exit, and player-only overrides are scoped
+to `#vinyl-page-container`.
+
+Artwork and title now share one vertical layout: the title is19pt below the artwork's
+untransformed box, measured at1291×949,1512×949 and1512×800. See
+[layout/transition evidence](docs/LAYOUT-TRANSITIONS.md).
 
 ## Known gaps
 
@@ -159,9 +164,16 @@ says where it stops.
 - **The song info and the playback bar are measured; their motion is not.** Layout, type
   size and hit geometry are off Apple's own tree, and every row of the rail now matches to
   within a rounding step. The transitions, timing curves and the artwork's play/pause
-  motion are faithful in kind but not dug as deep as the layout was, and the transport
-  glyphs inside their now-measured 48pt boxes are still the marks that were already
-  rendering — the boxes are Apple's, the marks inside them are not measured yet.
+  motion are not all measured to the same depth as the layout. The play/pause replacement
+  is now sampled from Apple's running app: two overlapping glyphs shrink/replace/overshoot,
+  replayed with measured scale/relative-opacity samples rather than a guessed spring. Its
+  ink bounds are measured too (play 24 × 27pt, pause 21 × 27.5pt); the underlying path
+  contours remain the previous reconstruction, not newly extracted Apple vector assets.
+  Previous/next activation now has separately sampled three-arrow hand-offs: an incoming
+  arrow grows, the middle shifts, the outgoing shrinks, with mirrored previous geometry.
+  Pointer-down/held feedback and exact vector contour equivalence remain unmeasured.
+  See the scoped [play/pause notes](docs/TRANSPORT-MOTION.md) and
+  [skip/queue-layout notes](docs/SKIP-MOTION.md).
 - **The backdrop wash reads greyer than Apple's** on some albums.
 
 ## Licence
@@ -176,3 +188,10 @@ state from the process's own public debugging endpoint while that process is run
 Apple, the Apple logo, iCloud, and Apple Music are trademarks of Apple Inc. NetEase Cloud
 Music is a trademark of NetEase. Their names are used here only to identify what this
 project is compatible with.
+
+## In-app settings (stage92)
+
+Open NetEase Settings → **Reapple Music** for immediate, persistent component switches,
+hover/manual-browse lyric focus, and native original/translation/romanization modes.
+The replica can be disabled without leaving native rail geometry behind. See
+[settings and lyric behavior](docs/SETTINGS-LYRICS.md) for scope and observed checks.

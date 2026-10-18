@@ -48,14 +48,22 @@ function readConfig() {
 }
 
 const { source, from: payloadFrom } = readPayload();
-const config = readConfig();
+let config = readConfig();
 
 // Normalise before hashing so that key order and whitespace -- the two things a hand-edited file
 // changes most -- do not read as a settings change and trigger a pointless reload.
-const configKey = crypto.createHash("sha256")
-  .update(JSON.stringify(config, Object.keys(config).sort()))
-  .digest("hex")
-  .slice(0, 16);
+const allowedKeys = new Set(["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear"]);
+const hashConfig = value => crypto.createHash("sha256")
+  .update(JSON.stringify(value, Object.keys(value).sort())).digest("hex").slice(0, 16);
+let configKey = hashConfig(config);
+function persistConfig(value) {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  const temporary = path.join(path.dirname(configPath), ".reapple-config-" + crypto.randomUUID() + ".tmp");
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, configPath);
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+}
 
 // The payload declares its version once in STAGE_VERSION and assigns the marker from it, so accept
 // either the constant declaration or a literal marker assignment.
@@ -94,6 +102,8 @@ if (!pages.length) {
 
 // What the page last saw, so a settings-only change is distinguishable from a no-op run.
 const statePath = path.join(home, "state.json");
+let registrations = {};
+try { registrations = JSON.parse(fs.readFileSync(statePath, "utf8")).registrations || {}; } catch {}
 
 for (const page of pages) {
   const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -102,6 +112,38 @@ for (const page of pages) {
     ws.addEventListener("error", () => reject(new Error(`socket ${page.url}`)), { once: true });
   });
   await send(ws, 1, "Runtime.enable", {});
+  // Only a bounded, bool-only preferences record crosses from page to filesystem.
+  // The page never supplies a filename, command, URL or arbitrary object to execute.
+  const pendingReply = await send(ws, 100, "Runtime.evaluate", {
+    expression: `(() => { try { const text = localStorage.getItem("reapple.settings.pending.v1");
+      return window.__reapplePendingSettings || (text && text.length <= 16384 ? JSON.parse(text) : null); } catch { return window.__reapplePendingSettings || null; } })()`, returnByValue: true
+  });
+  const pending = pendingReply.result?.value;
+  config = readConfig();
+  let consumedAt = null;
+  if (pending && typeof pending.at === "number" && Number.isFinite(pending.at) && pending.at > 0 && pending.at <= Date.now() + 60000 && pending.values && typeof pending.values === "object" && !Array.isArray(pending.values)) {
+    const values = Object.fromEntries(Object.entries(pending.values).filter(([key, value]) => allowedKeys.has(key) && typeof value === "boolean"));
+    let modifiedAt = 0;
+    try { modifiedAt = fs.statSync(configPath).mtimeMs; } catch {}
+    // CLI/file edits newer than an old unflushed UI batch win. Otherwise merge only
+    // the keys touched by the UI, retaining unrelated config fields.
+    if (pending.at >= modifiedAt || pending.baseKey === hashConfig(config)) {
+      const next = { ...config, ...values };
+      if (Object.keys(values).length && hashConfig(next) !== hashConfig(config)) persistConfig(next);
+      config = next;
+    }
+    consumedAt = pending.at;
+  }
+  configKey = hashConfig(config);
+  const preamble = `window.__reappleConfig = ${JSON.stringify(config)};\n` +
+    `window.__reappleSettingsKey = ${JSON.stringify(configKey)};\n`;
+  const booted = preamble + source;
+  if (consumedAt !== null) await send(ws, 101, "Runtime.evaluate", {
+    expression: `(() => { const at = ${JSON.stringify(consumedAt)};
+      try { const p = JSON.parse(localStorage.getItem("reapple.settings.pending.v1") || "null"); if (p?.at === at) localStorage.removeItem("reapple.settings.pending.v1"); } catch {}
+      if (window.__reapplePendingSettings?.at === at) delete window.__reapplePendingSettings; })()`, returnByValue: true
+  });
+
 
   const seen = await send(ws, 2, "Runtime.evaluate", {
     expression: "({version: window.__kabiStage || '', settings: window.__reappleSettingsKey || ''})",
@@ -111,7 +153,7 @@ for (const page of pages) {
   const settingsChanged = live.settings !== configKey;
 
   if (live.version === expected) {
-    if (settingsChanged) {
+    if (settingsChanged || consumedAt !== null) {
       // Cheap path: no teardown, no re-arm. The payload re-reads the switches on its next tick and
       // the master switch runs a full build when it comes back on.
       await send(ws, 3, "Runtime.evaluate", {
@@ -120,7 +162,18 @@ for (const page of pages) {
                     ` return window.__kabiReconfigure ? !!window.__kabiReconfigure() : null; })()`,
         returnByValue: true
       });
-      console.log(JSON.stringify({ url: page.url, mark: expected, reconfigured: true }));
+      if (settingsChanged && registrations[page.id]) {
+        await send(ws, 102, "Page.enable", {});
+        try { await send(ws, 103, "Page.removeScriptToEvaluateOnNewDocument", { identifier: registrations[page.id] }); }
+        catch (error) {
+          // CEF can expire a registration across sessions/documents. Only this
+          // already-absent condition is harmless; real protocol failures still fail.
+          if (!/"code":-32000,.*"message":"Script not found"/.test(error.message)) throw error;
+        }
+        const armed = await send(ws, 104, "Page.addScriptToEvaluateOnNewDocument", { source: booted });
+        registrations[page.id] = armed.identifier;
+      }
+      console.log(JSON.stringify({ url: page.url, mark: expected, reconfigured: true, preferencesSaved: consumedAt !== null }));
     } else {
       console.log(JSON.stringify({ url: page.url, mark: expected, skipped: true }));
     }
@@ -141,16 +194,8 @@ for (const page of pages) {
     try { await send(ws, 20, "Page.removeScriptToEvaluateOnNewDocument", { identifier: String(candidate) }); }
     catch { /* not armed; the sweep is what establishes which ones are */ }
   }
-  const installed = await send(ws, 3, "Page.addScriptToEvaluateOnNewDocument", { source });
-
-  // The config must exist before the payload's first line runs, because the payload reads it
-  // synchronously at boot to decide whether it may claim html.kabi-on at all. Splicing it in front
-  // of the payload is the only way to guarantee that ordering on both the new-document path and the
-  // direct-eval path below.
-  const preamble =
-    `window.__reappleConfig = ${JSON.stringify(config)};\n` +
-    `window.__reappleSettingsKey = ${JSON.stringify(configKey)};\n`;
-  const booted = preamble + source;
+  const installed = await send(ws, 3, "Page.addScriptToEvaluateOnNewDocument", { source: booted });
+  registrations[page.id] = installed.identifier;
 
   await send(ws, 4, "Runtime.evaluate", { expression: booted, returnByValue: true });
   const mark = await send(ws, 5, "Runtime.evaluate", {
@@ -164,5 +209,5 @@ for (const page of pages) {
 }
 
 try {
-  fs.writeFileSync(statePath, JSON.stringify({ version: expected, settings: configKey, at: new Date().toISOString() }, null, 2));
+  fs.writeFileSync(statePath, JSON.stringify({ version: expected, settings: configKey, registrations, at: new Date().toISOString() }, null, 2));
 } catch {}
