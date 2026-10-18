@@ -1,4 +1,4 @@
-# reapple
+# Reapple Music
 
 **Apple Music's Now Playing page, rebuilt inside NetEase Cloud Music on macOS.**
 
@@ -195,3 +195,17 @@ Open NetEase Settings → **Reapple Music** for immediate, persistent component 
 hover/manual-browse lyric focus, and native original/translation/romanization modes.
 The replica can be disabled without leaving native rail geometry behind. See
 [settings and lyric behavior](docs/SETTINGS-LYRICS.md) for scope and observed checks.
+
+## Floating playback capsule (stage95)
+
+The bottom bar can now use Apple Music's measured **700×54pt** floating-capsule
+layout, with34pt artwork and the original NetEase playback/seek/menu handlers.
+Settings → Reapple Music provides a capsule switch plus **frosted** (default),
+**enhanced glass** (explicit web approximation, not system Liquid Glass), and
+**solid** materials. Turning the component or master switch off restores the
+native bar immediately. [Geometry, adaptations and observations](docs/FLOATING-CAPSULE.md).
+
+```sh
+reapple config miniBar on
+reapple config miniBarMaterial frosted # or glass / solid
+```

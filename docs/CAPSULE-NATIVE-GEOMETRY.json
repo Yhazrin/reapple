@@ -1,0 +1,242 @@
+[
+  {
+    "desc": "",
+    "role": "AXWindow",
+    "rect": [
+      0,
+      33,
+      1291,
+      949
+    ],
+    "title": "Music",
+    "id": ""
+  },
+  {
+    "desc": "",
+    "role": "AXGroup",
+    "id": "",
+    "title": "",
+    "rect": [
+      0,
+      925,
+      208,
+      50
+    ]
+  },
+  {
+    "title": "",
+    "rect": [
+      399.5,
+      909,
+      700,
+      54
+    ],
+    "id": "",
+    "role": "AXGroup",
+    "desc": ""
+  },
+  {
+    "role": "AXGroup",
+    "id": "",
+    "title": "",
+    "desc": "",
+    "rect": [
+      399.5,
+      909,
+      700,
+      57.5
+    ]
+  },
+  {
+    "role": "AXGroup",
+    "id": "Music.miniPlayer.contentView[viewState=mini,isPlaying=false]",
+    "desc": "Mini Player",
+    "rect": [
+      408.5,
+      918,
+      682,
+      48.5
+    ],
+    "title": ""
+  },
+  {
+    "desc": "do not shuffle",
+    "title": "",
+    "rect": [
+      408.5,
+      922,
+      28,
+      28
+    ],
+    "id": "Music.miniPlayer.shuffleButton",
+    "role": "AXButton"
+  },
+  {
+    "id": "Music.miniPlayer.leadingTransportControl",
+    "desc": "Previous",
+    "rect": [
+      436.5,
+      922,
+      28,
+      28
+    ],
+    "role": "AXButton",
+    "title": ""
+  },
+  {
+    "title": "",
+    "id": "Music.miniPlayer.playbackTransportControl",
+    "rect": [
+      464.5,
+      918,
+      36,
+      36
+    ],
+    "role": "AXButton",
+    "desc": "Play"
+  },
+  {
+    "rect": [
+      500.5,
+      922,
+      28,
+      28
+    ],
+    "desc": "Next",
+    "title": "",
+    "role": "AXButton",
+    "id": "Music.miniPlayer.trailingTransportControl"
+  },
+  {
+    "id": "Music.miniPlayer.repeatButton",
+    "title": "",
+    "desc": "do not repeat",
+    "rect": [
+      528.5,
+      922,
+      28,
+      28
+    ],
+    "role": "AXButton"
+  },
+  {
+    "role": "AXGroup",
+    "title": "",
+    "rect": [
+      557.5,
+      918,
+      385,
+      48.5
+    ],
+    "id": "Music.miniPlayer.metadataRegion[state=populated]",
+    "desc": ""
+  },
+  {
+    "role": "AXButton",
+    "id": "Music.miniPlayer.artwork",
+    "rect": [
+      565.5,
+      919,
+      34,
+      34
+    ],
+    "desc": "Mini Player Artwork",
+    "title": ""
+  },
+  {
+    "desc": "Happier",
+    "role": "AXButton",
+    "title": "",
+    "id": "Music.miniPlayer.title",
+    "rect": [
+      607.5,
+      920.5,
+      50.5,
+      16
+    ]
+  },
+  {
+    "role": "AXButton",
+    "id": "Music.miniPlayer.subtitle",
+    "title": "",
+    "rect": [
+      607.5,
+      936.5,
+      140.5,
+      15
+    ],
+    "desc": "Ed Sheeran — ÷ (Deluxe)"
+  },
+  {
+    "title": "",
+    "rect": [
+      898.5,
+      918,
+      36,
+      36
+    ],
+    "desc": "More",
+    "id": "Music.miniPlayer.contextMenu",
+    "role": "AXButton"
+  },
+  {
+    "title": "",
+    "rect": [
+      557.5,
+      948.5,
+      385,
+      18
+    ],
+    "id": "Music.miniPlayer.playbackSlider",
+    "role": "AXSlider",
+    "desc": "Track Position"
+  },
+  {
+    "role": "AXButton",
+    "id": "Music.miniPlayer.lyricsButton",
+    "rect": [
+      943.5,
+      918,
+      36,
+      36
+    ],
+    "desc": "Lyrics",
+    "title": ""
+  },
+  {
+    "desc": "playing next",
+    "role": "AXButton",
+    "id": "Music.miniPlayer.queueButton",
+    "title": "",
+    "rect": [
+      980.5,
+      918,
+      36,
+      36
+    ]
+  },
+  {
+    "id": "Music.miniPlayer.airplayButton",
+    "title": "",
+    "desc": "airplay",
+    "role": "AXButton",
+    "rect": [
+      1017.5,
+      918,
+      36,
+      36
+    ]
+  },
+  {
+    "id": "Music.miniPlayer.volumeButton",
+    "title": "",
+    "rect": [
+      1054.5,
+      918,
+      36,
+      36
+    ],
+    "desc": "Volume",
+    "role": "AXButton"
+  }
+]

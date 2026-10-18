@@ -101,13 +101,14 @@ cmd_config() {
           queue:"the queue sheet the right-hand button opens",
           lyricHoverClear:"unblur the hovered lyric line",
           lyricScrollClear:"unblur lyrics during manual browsing",
-          miniBar:"reserved for the floating mini-bar capsule; not built yet"
+          miniBar:"native-state floating playback capsule",
+          miniBarMaterial:"frosted / glass (web approximation) / solid"
         };
         for(const k of Object.keys(notes)){
           if(!k.startsWith("_")) say_note(k,c[k],notes[k]);
         }
         function say_note(k,v,n){
-          process.stdout.write("  "+(v?"on ":"off")+"  "+k.padEnd(12)+n+"\n");
+          process.stdout.write("  "+(typeof v==="string"?v+" ":v?"on ":"off")+"  "+k.padEnd(12)+n+"\n");
         }
       ' "$CONFIG"
       say ""
@@ -122,10 +123,13 @@ cmd_config() {
         const fs=require("fs"),p=process.argv[1],k=process.argv[2],w=process.argv[3];
         let c={}; try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
         if(k.startsWith("_")){console.error("reapple: "+k+" is a comment, not a switch");process.exit(1)}
-        const known=["playPage","backdrop","artwork","songInfo","playbackBar","lyrics","footer","queue","lyricHoverClear","lyricScrollClear","miniBar"];
+        const known=["playPage","backdrop","artwork","songInfo","playbackBar","lyrics","footer","queue","lyricHoverClear","lyricScrollClear","miniBar","miniBarMaterial"];
         if(!known.includes(k)){console.error("reapple: unknown switch "+k+"\n  known: "+known.join(", "));process.exit(1)}
         const before=c[k];
-        c[k] = w==="toggle" ? !before
+        if(k==="miniBarMaterial") {
+          if(!["frosted","glass","solid"].includes(w)){console.error("reapple: material must be frosted, glass, or solid");process.exit(1)}
+          c[k]=w;
+        } else c[k] = w==="toggle" ? !before
              : w==="on"||w==="true"||w==="1" ? true
              : w==="off"||w==="false"||w==="0" ? false
              : (console.error("reapple: want on/off/true/false, got "+w), process.exit(1));

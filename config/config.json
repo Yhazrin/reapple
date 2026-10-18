@@ -10,5 +10,6 @@
   "queue": true,
   "miniBar": true,
   "lyricHoverClear": true,
-  "lyricScrollClear": true
+  "lyricScrollClear": true,
+  "miniBarMaterial": "frosted"
 }

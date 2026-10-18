@@ -52,7 +52,7 @@ let config = readConfig();
 
 // Normalise before hashing so that key order and whitespace -- the two things a hand-edited file
 // changes most -- do not read as a settings change and trigger a pointless reload.
-const allowedKeys = new Set(["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear"]);
+const allowedKeys = new Set(["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear", "miniBar"]);
 const hashConfig = value => crypto.createHash("sha256")
   .update(JSON.stringify(value, Object.keys(value).sort())).digest("hex").slice(0, 16);
 let configKey = hashConfig(config);
@@ -112,7 +112,7 @@ for (const page of pages) {
     ws.addEventListener("error", () => reject(new Error(`socket ${page.url}`)), { once: true });
   });
   await send(ws, 1, "Runtime.enable", {});
-  // Only a bounded, bool-only preferences record crosses from page to filesystem.
+  // Only a bounded, boolean / fixed-enum preferences record crosses from page to filesystem.
   // The page never supplies a filename, command, URL or arbitrary object to execute.
   const pendingReply = await send(ws, 100, "Runtime.evaluate", {
     expression: `(() => { try { const text = localStorage.getItem("reapple.settings.pending.v1");
@@ -122,7 +122,7 @@ for (const page of pages) {
   config = readConfig();
   let consumedAt = null;
   if (pending && typeof pending.at === "number" && Number.isFinite(pending.at) && pending.at > 0 && pending.at <= Date.now() + 60000 && pending.values && typeof pending.values === "object" && !Array.isArray(pending.values)) {
-    const values = Object.fromEntries(Object.entries(pending.values).filter(([key, value]) => allowedKeys.has(key) && typeof value === "boolean"));
+    const values = Object.fromEntries(Object.entries(pending.values).filter(([key, value]) => (allowedKeys.has(key) && typeof value === "boolean") || (key === "miniBarMaterial" && ["frosted", "glass", "solid"].includes(value))));
     let modifiedAt = 0;
     try { modifiedAt = fs.statSync(configPath).mtimeMs; } catch {}
     // CLI/file edits newer than an old unflushed UI batch win. Otherwise merge only

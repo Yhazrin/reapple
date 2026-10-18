@@ -3,7 +3,7 @@
   // Single source of truth for the version. Every guard below reads STAGE_VERSION, so a
   // release bump can never leave one site (a negated compare, a cached marker) behind and
   // silently disable the whole stage.
-  var STAGE_VERSION = "92";
+  var STAGE_VERSION = "95";
   // Page.addScriptToEvaluateOnNewDocument can run before <html> exists. Do not set the
   // installed marker and then crash: attach in the parser's first document mutation,
   // before its first paint. The previous bootstrap is always disposable.
@@ -47,7 +47,8 @@
       queue: true,        // the queue sheet the right-hand button opens
       lyricHoverClear: true,
       lyricScrollClear: true,
-      miniBar: true       // reserved for the floating mini-bar capsule; not built yet
+      miniBar: true,      // native-state floating capsule
+      miniBarMaterial: "frosted" // frosted / glass (approximation) / solid
     };
     // Re-read rather than latch: the injector rewrites window.__reappleConfig whenever the config
     // file changes and bumps the payload version, and re-reading here as well means a flip is
@@ -57,7 +58,7 @@
       var src = window.__reappleConfig || {};
       var pending = readPendingSettings();
       Object.keys(defaults).forEach(function (k) {
-        out[k] = pending && typeof pending.values[k] === "boolean" ? pending.values[k] : typeof src[k] === "boolean" ? src[k] : defaults[k];
+        out[k] = pending && validPluginSetting(k, pending.values[k]) ? pending.values[k] : validPluginSetting(k, src[k]) ? src[k] : defaults[k];
       });
       return out;
     };
@@ -65,7 +66,7 @@
   // Settings are app-local, not a network service. UI writes a small validated pending record;
   // the existing local injector consumes it into config.json atomically on its next pass.
   var REAPPLE_PENDING_KEY = "reapple.settings.pending.v1";
-  var REAPPLE_KEYS = ["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear"];
+  var REAPPLE_KEYS = ["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear", "miniBar", "miniBarMaterial"];
   var settingsView_ = null;
   var lyricMenu_ = null;
   function readPendingSettings() {
@@ -74,10 +75,13 @@
       return p && typeof p === "object" && p.values && typeof p.values === "object" ? p : null;
     } catch (_) { return window.__reapplePendingSettings || null; }
   }
+  function validPluginSetting(key, value) {
+    return key === "miniBarMaterial" ? ["frosted", "glass", "solid"].indexOf(value) >= 0 : typeof value === "boolean";
+  }
   function setPluginSetting(key, value) {
-    if (REAPPLE_KEYS.indexOf(key) < 0 || typeof value !== "boolean") return;
+    if (REAPPLE_KEYS.indexOf(key) < 0 || !validPluginSetting(key, value)) return;
     var old = readPendingSettings(), values = {};
-    REAPPLE_KEYS.forEach(function (name) { if (old && typeof old.values[name] === "boolean") values[name] = old.values[name]; });
+    REAPPLE_KEYS.forEach(function (name) { if (old && validPluginSetting(name, old.values[name])) values[name] = old.values[name]; });
     values[key] = value;
     var pending = { at: Date.now(), baseKey: window.__reappleSettingsKey || "", values: values };
     window.__reapplePendingSettings = pending;
@@ -148,8 +152,8 @@
       if (on && !mark.firstChild) mark.appendChild(view.tick.cloneNode(true));
       if (!on && mark.firstChild) mark.replaceChildren();
     });
-    view.radios.forEach(function (item) {
-      var on = item.input.value === native.mode;
+    view.radios.concat(view.materials || []).forEach(function (item) {
+      var on = item.input.value === (item.input.name === "reapple-mini-material" ? cfg.miniBarMaterial : native.mode);
       item.input.checked = on; item.input.setAttribute("aria-checked", String(on));
       if (item.control.classList.contains("cmd-radio-checked") !== on) item.control.classList.toggle("cmd-radio-checked", on);
       var inner = item.control.querySelector(".cmd-radio-inner");
@@ -202,7 +206,7 @@
       input.addEventListener("change", function () { setPluginSetting(key, input.checked); });
       view.controls[key] = { input: input, control: control };
     }
-    var master = group("插件开关"); checkbox(master, "playPage", "启用 Reapple Music 播放器");
+    var master = group("插件开关"); checkbox(master, "playPage", "启用 Reapple Music（总开关）");
     var modules = group("播放器组件");
     [["backdrop", "专辑氛围背景"], ["artwork", "专辑封面"], ["songInfo", "歌曲信息"], ["playbackBar", "进度条与时间"], ["lyrics", "歌词"], ["footer", "底部歌词／队列按钮"], ["queue", "播放列表"]].forEach(function (row) { checkbox(modules, row[0], row[1]); });
     var browsing = group("歌词交互"); checkbox(browsing, "lyricHoverClear", "鼠标悬停的歌词行取消模糊"); checkbox(browsing, "lyricScrollClear", "手动浏览歌词时取消全部模糊");
@@ -218,7 +222,17 @@
     });
     var availability = document.createElement("p"); view.availability = availability; language.appendChild(availability);
     var hint = document.createElement("p"); hint.textContent = "原文／翻译／罗马音沿用网易云原生互斥设置。播放器内可右键点击歌词按钮切换，不增加常驻组件。"; language.appendChild(hint);
-    var future = group("后续计划"); checkbox(future, "miniBar", "悬浮胶囊播放栏（尚未实现）", true);
+    var capsule = group("悬浮播放栏"); checkbox(capsule, "miniBar", "Apple Music 布局的悬浮胶囊播放栏");
+    view.materials = [];
+    [["frosted", "高斯毛玻璃（默认）"], ["glass", "增强玻璃（网页近似，非原生液态玻璃）"], ["solid", "纯色（减少透明与模糊）"]].forEach(function (row) {
+      var label = document.createElement("label"); label.className = "list-item";
+      var control = scrubControlTemplate(radioSample.cloneNode(true)), input = control.querySelector("input");
+      input.name = "reapple-mini-material"; input.value = row[0]; input.setAttribute("aria-label", row[1]);
+      control.querySelector(".cmd-radio-addon").textContent = row[1]; control.querySelector(".cmd-radio-inner-display").replaceChildren();
+      label.appendChild(control); capsule.appendChild(label); view.materials.push({ input: input, control: control });
+      input.addEventListener("change", function () { if (input.checked) setPluginSetting("miniBarMaterial", row[0]); });
+    });
+    var materialHint = document.createElement("p"); materialHint.textContent = "复用网易云原生进度、播放与菜单控件。增强玻璃使用模糊与高光近似，不包含 Apple 系统级折射；关闭总开关或本组件即可恢复原底栏。"; capsule.appendChild(materialHint);
     var status = document.createElement("p"); status.id = "reapple-settings-status"; status.setAttribute("role", "status"); view.status = status; content.appendChild(status);
     view.navigate = function (event) {
       var target = event.target.closest(".cmd-anchor-link-title"); if (!target) return;
@@ -273,6 +287,58 @@
       el.removeAttribute("data-kabi-native"); el.style.removeProperty("--kabi-more-icon"); delete el._kabiControlHome;
     });
     borrowedControls_.clear();
+  }
+
+  // Apple native AX reference: APPLE93-CAPSULE-OUTER.json (700x54pt outer frame,
+  // 9pt inset,148pt transport,385pt metadata,148pt utilities,34pt artwork).
+  // The host retains all original React children and handlers. Only owned overlays
+  // and CSS change the presentation; no second player or copied playback state.
+  var miniView_ = null;
+  function disposeMiniBar() {
+    var v = miniView_; if (!v) return;
+    v.bindings.forEach(function (b) { b.button.removeEventListener("click", b.click); });
+    v.nodes.forEach(function (n) { n.remove(); });
+    v.root.classList.remove("reapple-mini"); v.root.removeAttribute("data-material");
+    v.root.style.removeProperty("--reapple-mini-sidebar");
+    v.host.classList.remove("reapple-mini-host"); miniView_ = null;
+  }
+  function syncMiniBar() {
+    var root = [].find.call(document.querySelectorAll("#page_pc_mini_bar"), function (e) { return !e.closest("#vinyl-page-container"); });
+    var enabled = cfg.playPage && cfg.miniBar;
+    if (!enabled || !root || !root.querySelector(".default-bar-wrapper")) { disposeMiniBar(); return; }
+    if (miniView_ && (miniView_.root !== root || !miniView_.playGlyph || !miniView_.playGlyph.isConnected || miniView_.bindings.some(function (b) { return !b.button.isConnected; }))) disposeMiniBar();
+    if (!miniView_) {
+      var host = root.closest("footer"); if (!host) return;
+      var v = { root: root, host: host, nodes: [], bindings: [] }; miniView_ = v;
+      [["prev", "tid_playbar_prev_btn"], ["play", "tid_playbar_play_btn"], ["next", "tid_playbar_next_btn"]].forEach(function (row) {
+        var button = root.querySelector('[data-testid="' + row[1] + '"]'); if (!button) return;
+        var glyph = document.createElement("span"); glyph.className = "reapple-mini-glyph"; glyph.setAttribute("aria-hidden", "true"); glyph.setAttribute("data-mini-role", row[0]);
+        button.appendChild(glyph); v.nodes.push(glyph);
+        if (row[0] !== "play") {
+          ensureSkipGlyph(glyph);
+          var click = function () { animateSkipGlyph(glyph, row[0]); };
+          button.addEventListener("click", click); v.bindings.push({ button: button, click: click });
+        } else v.playGlyph = glyph;
+      });
+      // Native combines shuffle/repeat in one menu. Keep its mode control and add
+      // an explicit repeat button backed by the already-verified native action.
+      var repeat = document.createElement("button"); repeat.type = "button"; repeat.className = "reapple-mini-repeat";
+      repeat.addEventListener("click", function () { switchMode("repeat"); }); root.appendChild(repeat); v.nodes.push(repeat); v.repeat = repeat;
+    }
+    var v = miniView_;
+    if (!root.classList.contains("reapple-mini")) root.classList.add("reapple-mini");
+    if (!v.host.classList.contains("reapple-mini-host")) v.host.classList.add("reapple-mini-host");
+    var material = cfg.miniBarMaterial;
+    if (root.getAttribute("data-material") !== material) root.setAttribute("data-material", material);
+    var player = document.getElementById("vinyl-page-container"), main = player && player.parentElement;
+    var sidebar = Math.max(0, Math.min(window.innerWidth / 2, main ? main.getBoundingClientRect().left : 0));
+    var left = sidebar + "px"; if (root.style.getPropertyValue("--reapple-mini-sidebar") !== left) root.style.setProperty("--reapple-mini-sidebar", left);
+    if (v.playGlyph) syncPlayGlyph(v.playGlyph, isPlaying() ? "pause" : "play");
+    var mode = playingMode(), kind = mode === "playOneCycle" ? "one" : "all";
+    if (v.repeat.getAttribute("data-icon") !== kind) { v.repeat.innerHTML = kind === "one" ? ICONS.repeat1 : ICONS.repeat; v.repeat.setAttribute("data-icon", kind); }
+    var on = mode === "playCycle" || mode === "playOneCycle";
+    v.repeat.setAttribute("aria-pressed", String(on));
+    v.repeat.setAttribute("aria-label", mode === "playOneCycle" ? "单曲循环；点击关闭" : on ? "列表循环；点击单曲循环" : "开启列表循环");
   }
 
   var cfg = CFG();
@@ -737,6 +803,11 @@
     "#reapple-lyric-menu button{display:block;width:100%;padding:8px 12px;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;}" +
     "#reapple-lyric-menu button[aria-checked=true]{font-weight:600;}#reapple-lyric-menu button:hover:not(:disabled){background:Highlight;color:HighlightText;}#reapple-lyric-menu button:disabled{opacity:.45;cursor:default;}";
   document.documentElement.appendChild(settingsStyle);
+  var miniStyle = document.createElement("style"); miniStyle.id = "reapple-mini-style";
+  miniStyle.textContent = "/* Geometry measured from the native mini player, material is a web adaptation. */\n.reapple-mini-host{background:transparent!important;border:0!important;box-shadow:none!important;pointer-events:none!important;}\n#page_pc_mini_bar.reapple-mini{position:absolute!important;inset:auto auto 19px calc(50% + var(--reapple-mini-sidebar,0px)/2)!important;transform:translateX(-50%)!important;width:min(700px,calc(100% - var(--reapple-mini-sidebar,0px) - 32px))!important;height:54px!important;box-sizing:border-box!important;border-radius:28px!important;background:rgba(247,248,250,.80)!important;box-shadow:0 8px 28px #00000016,0 1px 4px #0000000a,inset 0 0 0 1px #ffffffc7!important;backdrop-filter:blur(28px) saturate(1.45);-webkit-backdrop-filter:blur(28px) saturate(1.45);color:var(--colorBlack1,#24252a)!important;pointer-events:auto!important;isolation:isolate;--mini-side:148px;--mini-rail:158px;}\n#page_pc_mini_bar.reapple-mini[data-material=glass]{background:linear-gradient(150deg,#ffffffe6,#ffffff66 36%,#ffffff80 67%,#ffffffbf)!important;box-shadow:0 10px 32px #0000001f,0 2px 6px #00000012,inset 0 1px 1px #fff,inset 0 -1px 1px #ffffff80,inset 1px 0 1px #fff!important;backdrop-filter:blur(20px) saturate(1.8);-webkit-backdrop-filter:blur(20px) saturate(1.8);}\n#page_pc_mini_bar.reapple-mini[data-material=solid]{background:var(--colorBackgroundWhite,#f8f9fa)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:0 5px 20px #00000014,inset 0 0 0 1px #88888828!important;}\n#page_pc_mini_bar.reapple-mini>.cmd-space{display:block!important;position:static!important;width:100%!important;height:54px!important;margin:0!important;padding:0!important;}\n#page_pc_mini_bar.reapple-mini [class*=MinibarHoverMask]{display:none!important;}\n#page_pc_mini_bar.reapple-mini .default-bar-wrapper{position:static!important;display:block!important;background:transparent!important;width:100%!important;height:54px!important;padding:0!important;border:0!important;}\n#page_pc_mini_bar.reapple-mini .default-bar-wrapper>.side:first-child{position:absolute!important;left:var(--mini-rail)!important;right:var(--mini-rail)!important;top:9px!important;width:auto!important;min-width:0!important;height:36px!important;padding:0!important;}\n#page_pc_mini_bar.reapple-mini .left{position:static!important;display:flex!important;align-items:center!important;gap:8px!important;width:100%!important;height:36px!important;padding:0!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_btn_pc_minibar_vinyl]{width:34px!important;height:34px!important;min-width:34px!important;border-radius:6px!important;overflow:hidden!important;transform:none!important;animation:none!important;background:none!important;box-shadow:0 0 0 .5px #00000014!important;cursor:pointer;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_btn_pc_minibar_vinyl]::before,#page_pc_mini_bar.reapple-mini [data-testid=tid_btn_pc_minibar_vinyl]::after{display:none!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_btn_pc_minibar_vinyl] img{display:block!important;position:static!important;width:100%!important;height:100%!important;border:0!important;border-radius:6px!important;object-fit:cover!important;transform:none!important;animation:none!important;}\n#page_pc_mini_bar.reapple-mini [class*=songPlayInfo]{display:block!important;flex:1!important;min-width:0!important;width:auto!important;max-width:none!important;margin:0!important;padding:0!important;}\n#page_pc_mini_bar.reapple-mini .info-wrapper{display:block!important;width:100%!important;min-width:0!important;}\n#page_pc_mini_bar.reapple-mini .title-container{display:block!important;width:100%!important;max-width:100%!important;font-family:-apple-system,'PingFang SC',sans-serif!important;font-size:13px!important;line-height:16px!important;font-weight:500!important;letter-spacing:-.01em!important;}\n#page_pc_mini_bar.reapple-mini .main-title,#page_pc_mini_bar.reapple-mini .title{display:block!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;font:inherit!important;}\n#page_pc_mini_bar.reapple-mini .author{display:block!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;font-size:12px!important;font-weight:400!important;line-height:15px!important;opacity:.6;}\n#page_pc_mini_bar.reapple-mini .vip-tag,#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_comment_btn],#page_pc_mini_bar.reapple-mini .redstar-count,#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_collect_btn]{display:none!important;}\n#page_pc_mini_bar.reapple-mini .left>.cmd-space:last-child{flex:0 0 64px!important;width:64px!important;margin:0!important;}\n#page_pc_mini_bar.reapple-mini .red-star-comment-wrapper{width:28px!important;display:block!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_redstar_btn]{width:28px!important;height:28px!important;min-height:0!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_redstar_btn] .cmd-icon{font-size:17px!important;}\n#page_pc_mini_bar.reapple-mini .default-bar-wrapper>.middle{position:absolute!important;left:9px!important;top:9px!important;width:148px!important;height:36px!important;margin:0!important;padding:0!important;display:block!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_controls]{height:36px!important;width:148px!important;display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:0!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_controls]>button,#page_pc_mini_bar.reapple-mini [data-testid=tid_playmode_btn],#page_pc_mini_bar.reapple-mini [data-testid=tid_playmode_btn]>button{flex:none!important;width:28px!important;height:28px!important;min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;}\n#page_pc_mini_bar.reapple-mini button{border-radius:50%!important;border:0!important;background:transparent!important;box-shadow:none!important;transition:background .15s,scale .16s!important;cursor:pointer;}\n#page_pc_mini_bar.reapple-mini button:hover{background:#80808016!important;}\n#page_pc_mini_bar.reapple-mini button:active{scale:.9;transition:scale .07s!important;}\n#page_pc_mini_bar.reapple-mini button:focus-visible{outline:2px solid #fa586a!important;outline-offset:2px;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_controls]>[data-testid=tid_playbar_play_btn]{width:36px!important;height:36px!important;background:transparent!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_controls] .cmd-icon{font-size:16px!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_prev_btn]>.cmd-button-content,#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_play_btn]>.cmd-button-content,#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_next_btn]>.cmd-button-content{visibility:hidden!important;}\n#page_pc_mini_bar.reapple-mini .reapple-mini-glyph{display:grid;place-items:center;position:absolute;inset:0;pointer-events:none;}\n#page_pc_mini_bar.reapple-mini .reapple-mini-glyph[data-mini-role=play]>svg{position:absolute;left:50%;top:50%;width:16px;height:18px;color:inherit;}\n#page_pc_mini_bar.reapple-mini .reapple-mini-glyph[data-mini-role=play]>svg[data-glyph=pause]{width:14px;height:18.333px;}\n#page_pc_mini_bar.reapple-mini .skip-glyph{position:relative;display:block;width:33px;height:19px;transform:scale(.64);pointer-events:none;}\n#page_pc_mini_bar.reapple-mini [data-mini-role=prev] .skip-glyph{transform:scale(-.64,.64);}\n#page_pc_mini_bar.reapple-mini .skip-glyph svg{position:absolute;left:0;top:0;width:16.5px;height:19px;transform-origin:8.25px 9.5px;}\n#page_pc_mini_bar.reapple-mini .reapple-mini-repeat{position:absolute!important;left:129px!important;top:13px!important;display:grid;place-items:center;width:28px!important;height:28px!important;color:inherit;}\n#page_pc_mini_bar.reapple-mini .reapple-mini-repeat svg{width:14px;height:14px;}\n#page_pc_mini_bar.reapple-mini .reapple-mini-repeat[aria-pressed=true]{color:#f34b62;background:#fa586a14!important;}\n#page_pc_mini_bar.reapple-mini .right-side,#page_pc_mini_bar.reapple-mini .right-side>.right,#page_pc_mini_bar.reapple-mini .right>.cmd-space{position:static!important;width:auto!important;height:auto!important;padding:0!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_playlist_btn],#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_lyric_btn],#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_volume_btn],#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_soundquality],#page_pc_mini_bar.reapple-mini .right>button:last-child{position:absolute!important;top:9px!important;left:auto!important;width:36px!important;height:36px!important;min-width:0!important;min-height:0!important;padding:0!important;margin:0!important;display:grid!important;place-items:center!important;color:inherit;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_playlist_btn]{right:83px!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_lyric_btn]{right:120px!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_volume_btn]{right:9px!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_soundquality]{right:46px!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_soundquality] .cmd-tag{font-size:9px!important;line-height:14px!important;padding:0 2px!important;max-width:34px!important;overflow:hidden!important;white-space:nowrap!important;}\n#page_pc_mini_bar.reapple-mini .right>button:last-child{right:165px!important;}\n#page_pc_mini_bar.reapple-mini .right .cmd-icon,#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_playlist_btn] .cmd-icon{font-size:17px!important;}\n#page_pc_mini_bar.reapple-mini>.cmd-space>[class*=SpaceContainer]{position:absolute!important;left:var(--mini-rail)!important;right:var(--mini-rail)!important;top:48px!important;width:auto!important;height:3px!important;padding:0!important;z-index:2;}\n#page_pc_mini_bar.reapple-mini .slider-default{width:100%!important;height:3px!important;border-radius:3px!important;background:#80808020!important;overflow:visible!important;}\n#page_pc_mini_bar.reapple-mini .slider-default .track{height:3px!important;border-radius:3px!important;background:currentColor!important;opacity:.5;}\n#page_pc_mini_bar.reapple-mini .slider-default .cache{background:#80808014!important;}\n#page_pc_mini_bar.reapple-mini .slider-default .thumb{opacity:0!important;}\n#page_pc_mini_bar.reapple-mini .slider-default .hotzone-overlay{height:18px!important;top:-7.5px!important;}\n#page_pc_mini_bar.reapple-mini .slider-default .dots{display:none!important;}\n@media(prefers-color-scheme:dark){#page_pc_mini_bar.reapple-mini{background:rgba(38,39,43,.82)!important;color:#f1f1f3!important;box-shadow:0 8px 28px #0004,inset 0 0 0 1px #ffffff24!important;}#page_pc_mini_bar.reapple-mini[data-material=glass]{background:linear-gradient(150deg,#ffffff2e,#ffffff08 40%,#ffffff18)!important;box-shadow:0 10px 32px #0005,inset 0 1px 1px #ffffff66,inset 0 -1px 1px #ffffff22!important;}#page_pc_mini_bar.reapple-mini[data-material=solid]{background:#28292d!important;}}\n@media(max-width:800px){#page_pc_mini_bar.reapple-mini{--reapple-mini-sidebar:0px!important;--mini-side:120px;--mini-rail:130px;width:calc(100% - 24px)!important;}#page_pc_mini_bar.reapple-mini .default-bar-wrapper>.middle{width:120px!important;}#page_pc_mini_bar.reapple-mini [data-testid=tid_playmode_btn],#page_pc_mini_bar.reapple-mini .reapple-mini-repeat{display:none!important;}#page_pc_mini_bar.reapple-mini .left>.cmd-space:last-child{display:none!important;}}\n@media(prefers-reduced-motion:reduce){#page_pc_mini_bar.reapple-mini *{transition:none!important;animation:none!important;}}\n@media(prefers-reduced-transparency:reduce){#page_pc_mini_bar.reapple-mini{background:var(--colorBackgroundWhite,#f8f9fa)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}}\n";
+  miniStyle.textContent += "/* Neutralise only the host's hard constraints which conflict with the measured capsule. */\n#page_pc_mini_bar.reapple-mini .default-bar-wrapper,#page_pc_mini_bar.reapple-mini .middle,#page_pc_mini_bar.reapple-mini .side,#page_pc_mini_bar.reapple-mini .right{color:inherit!important;}\n#page_pc_mini_bar.reapple-mini button:not([data-testid=tid_redstar_btn]){color:inherit!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_controls]>button{position:relative!important;}\n#page_pc_mini_bar.reapple-mini [data-testid=tid_btn_pc_minibar_vinyl]{min-height:34px!important;max-height:34px!important;max-width:34px!important;margin:0!important;}\n#page_pc_mini_bar.reapple-mini [class*=songPlayInfo],#page_pc_mini_bar.reapple-mini .info-wrapper,#page_pc_mini_bar.reapple-mini .title-container{height:31px!important;min-height:31px!important;max-height:31px!important;}\n#page_pc_mini_bar.reapple-mini .main-title,#page_pc_mini_bar.reapple-mini .title{width:100%!important;max-width:100%!important;height:16px!important;margin:0!important;}\n#page_pc_mini_bar.reapple-mini .author{width:100%!important;height:15px!important;min-height:15px!important;margin:0!important;opacity:1!important;}\n#page_pc_mini_bar.reapple-mini .default-bar-wrapper>.side:first-child{right:157px!important;}\n#page_pc_mini_bar.reapple-mini>.cmd-space>[class*=SpaceContainer]{right:157px!important;}\n/* The original queue button stays in its React parent. The root transform is\n   the fixed-position containing block, so it can occupy the right utility slot. */\n#page_pc_mini_bar.reapple-mini [data-testid=tid_playbar_controls]>[data-testid=tid_playbar_playlist_btn]{position:fixed!important;top:9px!important;left:auto!important;right:83px!important;width:36px!important;height:36px!important;}\n";
+  miniStyle.textContent += "\n#page_pc_mini_bar.reapple-mini .main-title [class*=MarqueeWrapper]{display:block!important;width:100%!important;overflow:hidden!important;mask-image:none!important;}\n#page_pc_mini_bar.reapple-mini .main-title .marquee{animation:none!important;transform:none!important;min-width:0!important;width:100%!important;display:block!important;}\n#page_pc_mini_bar.reapple-mini .main-title .marquee~.marquee{display:none!important;}\n#page_pc_mini_bar.reapple-mini .main-title .initial-child-container,#page_pc_mini_bar.reapple-mini .main-title .child{display:block!important;width:100%!important;transform:none!important;}\n#page_pc_mini_bar.reapple-mini .title>span{display:block!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;font:inherit!important;}\n";
+  document.documentElement.appendChild(miniStyle);
   document.addEventListener("pointerdown", lyricMenuOutside, true);
   document.addEventListener("keydown", lyricMenuKey);
 
@@ -2517,6 +2588,7 @@
   var runtimeRoot = document.getElementById("vinyl-page-container");
   var lastOpen = false;
   var lastLyricPreference_ = "";
+  var lastMiniState_ = "";
   function bindHostStore() {
     var store = queueStore();
     if (!store || store === hostStore_) return;
@@ -2525,6 +2597,8 @@
     function reconcile() {
       if (disposed) return;
       var state = store.getState();
+      var miniState = state.playing && [state.playing.playingState, state.playing.resourceTrackId, state.playing.playingMode].join(":");
+      if (miniState !== lastMiniState_) { lastMiniState_ = miniState; schedule("mini"); }
       var page = state["page:vinylPage"] && state["page:vinylPage"].pageState;
       var mode = state.playing && state.playing.playingMode;
       var lyricPreference = (state.setting && state.setting.lyricMode) + ":" + (state["page:vinylPage"] && state["page:vinylPage"].isLyricPausedScroll);
@@ -2560,6 +2634,7 @@
     }
     previousMaster_ = cfg.playPage;
     if (changes.all || changes.settings) syncSettingsPanel();
+    if (changes.all || changes.settings || changes.layout || changes.meta || changes.mini) syncMiniBar();
     if (!cfg.queue && footQueueOpen()) footSheetClose();
     var h = hideCss(cfg);
     if (switchStyle.textContent !== h) switchStyle.textContent = h;
@@ -2586,7 +2661,9 @@
     records.forEach(function (record) {
       var node = record.target.nodeType === 1 ? record.target : record.target.parentElement;
       if (!node || node === document.documentElement) return;
-      if (node.closest("#reapple-settings-panel,#reapple-settings-tab,#reapple-lyric-menu")) return;
+      if (node.closest("#reapple-settings-panel,#reapple-settings-tab,#reapple-lyric-menu,.reapple-mini-glyph,.reapple-mini-repeat")) return;
+      var miniRoot = node.closest("#page_pc_mini_bar");
+      if (miniRoot && !miniRoot.closest("#vinyl-page-container")) { if (record.type === "childList") schedule("mini"); return; }
       if (record.type === "childList" && !runtimeRoot.contains(node)) schedule("settings");
       if (node.closest("#kabi-bg,#kabi-art,#kabi-times")) return;
       if (node.closest("#kabi-stack")) {
@@ -2641,7 +2718,7 @@
   };
   window.__kabiStageDispose = function () {
     disposed = true;
-    disposeSettingsPanel(); closeLyricMenu();
+    disposeSettingsPanel(); closeLyricMenu(); disposeMiniBar();
     document.removeEventListener("pointerdown", lyricMenuOutside, true);
     document.removeEventListener("keydown", lyricMenuKey);
     if (hostUnsubscribe_) hostUnsubscribe_();
@@ -2686,7 +2763,7 @@
       var el = document.getElementById(id);
       if (el && el.parentNode) el.parentNode.removeChild(el);
     });
-    ["kabi-stage-style", "kabi-switch-style", "reapple-settings-style"].forEach(function (id) {
+    ["kabi-stage-style", "kabi-switch-style", "reapple-settings-style", "reapple-mini-style"].forEach(function (id) {
       var sheet = document.getElementById(id);
       if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet);
     });
