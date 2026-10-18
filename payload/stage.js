@@ -3,7 +3,7 @@
   // Single source of truth for the version. Every guard below reads STAGE_VERSION, so a
   // release bump can never leave one site (a negated compare, a cached marker) behind and
   // silently disable the whole stage.
-  var STAGE_VERSION = "95";
+  var STAGE_VERSION = "96";
   // Page.addScriptToEvaluateOnNewDocument can run before <html> exists. Do not set the
   // installed marker and then crash: attach in the parser's first document mutation,
   // before its first paint. The previous bootstrap is always disposable.
@@ -22,6 +22,33 @@
   if (window.__kabiStage === STAGE_VERSION) return;
   if (window.__kabiStageDispose) window.__kabiStageDispose();
   window.__kabiStage = STAGE_VERSION;
+  // Upgrade repair: pre92 releases pinned the host column inline. Removing our
+  // stylesheet cannot undo those old writes. Ask the observed host Qt layout
+  // callback to recompute its own sizes once; new versions never own that style.
+  // This is guarded to NetEase's inspected layout/ref shape, not a guessed size.
+  (function recoverLegacyColumn() {
+    var display = document.querySelector("#vinyl-page-container .display");
+    if (!display || display.style.getPropertyPriority("position") !== "important" || display.style.position !== "fixed" || display.style.getPropertyPriority("max-height") !== "important") return;
+    var key = Object.keys(display).find(function (k) { return k.indexOf("__reactInternalInstance") === 0; });
+    var fiber = key && display[key];
+    for (var depth = 0; fiber && depth < 12; depth++, fiber = fiber.return) {
+      var hooks = [], h = fiber.memoizedState;
+      for (var n = 0; h && n < 20; n++, h = h.next) hooks.push(h.memoizedState);
+      var columnRef = hooks.find(function (v) { return v && v.current === display; });
+      var sizeRef = hooks.find(function (v) { return v && v.current && typeof v.current.width === "number" && typeof v.current.height === "number"; });
+      var callback = hooks.find(function (v) { return Array.isArray(v) && typeof v[0] === "function" && v[0].toString().indexOf("updateSize") >= 0 && v[0].toString().indexOf("style.cssText") >= 0; });
+      if (!columnRef || !sizeRef || !callback) continue;
+      var previous = sizeRef.current;
+      try {
+        sizeRef.current = Object.assign({}, previous, { width: -1, height: -1 });
+        callback[0]();
+        window.__reappleLegacyColumnRepair = { version: STAGE_VERSION, restored: display.style.getPropertyPriority("position") !== "important" };
+      } catch (error) { sizeRef.current = previous; console.warn("Reapple Music: native column upgrade recovery failed", error); }
+      return;
+    }
+    console.warn("Reapple Music: legacy column detected; host layout shape changed. Restart NetEase once to clear old inline geometry.");
+  })();
+
   var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   // Component switches.  The injector reads ~/.reapple/config.json and puts the result on

@@ -196,7 +196,7 @@ hover/manual-browse lyric focus, and native original/translation/romanization mo
 The replica can be disabled without leaving native rail geometry behind. See
 [settings and lyric behavior](docs/SETTINGS-LYRICS.md) for scope and observed checks.
 
-## Floating playback capsule (stage95)
+## Floating playback capsule (stage96)
 
 The bottom bar can now use Apple Music's measured **700×54pt** floating-capsule
 layout, with34pt artwork and the original NetEase playback/seek/menu handlers.

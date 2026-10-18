@@ -1,4 +1,4 @@
-# Floating capsule — stage95
+# Floating capsule — stage96
 
 ## Native reference, not a new playback engine
 
@@ -54,7 +54,7 @@ remove the backdrop filter. Light and dark native app appearances were observed.
 
 Same-input stage92 baseline / stage95 / actual rollback92:
 full1512×92.5pt native bar →700×54pt floating capsule → full1512×92.5pt native bar.
-Stage95 reapplied. All five probed native controls retained hit reachability. Native
+Stage95 reapplied; stage96 retains this capsule implementation and adds guarded legacy-layout upgrade recovery. All five probed native controls retained hit reachability. Native
 playback state2→1→2; repeat mode playOrder→playCycle and original mode restored.
 Changing all three material radios updated the live filter; `solid` was read back
 from the config file, then the original `frosted` preference was restored and saved.
@@ -64,3 +64,14 @@ Re-enabling creates one repeat button, not duplicates.
 
 No broad test suite, app restart, independent capsule skip recording, or new claim
 of pixel-identical liquid-glass rendering is included in this checkpoint.
+
+## Hot-upgrade recovery (stage96)
+
+A pre92 payload can leave old inline rail geometry even when a new payload no longer
+writes it. Stage96 detects that exact legacy signature and, for the inspected host
+layout/ref shape, invokes NetEase's own Qt updateSize callback to restore its native
+sizes once. No guessed native dimensions are shipped. Real91→96 upgrade reproduced
+fixed-position overlap before and static native flow/no overlap after, without an
+app restart. If a future host changes that internal shape, the guarded repair logs
+a restart-once warning rather than mutating an unknown layout. Tested host: macOS
+NetEase3.1.12. No broad compatibility claim is implied.

@@ -1,11 +1,11 @@
 # Changelog
 
-## Capsule checkpoint — stage95
+## Capsule checkpoint — stage96
 
 - Native-measured floating capsule with live NetEase controls and existing icon motion.
 - Independent capsule switch; frosted / enhanced-glass approximation / solid materials.
 - Reversible presentation, long-title truncation, reduced-motion handling.
-- Previous settings and native-layout corrections retained.
+- Previous settings and native-layout corrections retained; guarded hot-upgrade recovery removes pre92 inline geometry through the native host layout callback.
 
 ## Settings checkpoint — stage92 (`stage-92-settings`)
 
