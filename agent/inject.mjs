@@ -93,8 +93,9 @@ function send(ws, id, method, params) {
   });
 }
 
+const watchdog = setTimeout(() => { console.error("reapple: injection deadline exceeded"); process.exit(1); }, 18000);
 const targets = await listTargets();
-const pages = targets.filter((item) => item.type === "page" && item.webSocketDebuggerUrl);
+const pages = targets.filter((item) => item.type === "page" && item.url?.startsWith("orpheus://orpheus/") && item.webSocketDebuggerUrl);
 if (!pages.length) {
   console.error("reapple: NetEase exposes no page target");
   process.exit(1);
@@ -146,14 +147,14 @@ for (const page of pages) {
 
 
   const seen = await send(ws, 2, "Runtime.evaluate", {
-    expression: "({version: window.__kabiStage || '', settings: window.__reappleSettingsKey || ''})",
+    expression: "({version: window.__kabiStage || '', settings: window.__reappleSettingsKey || '', healthy: typeof window.__kabiReconfigure === 'function'})",
     returnByValue: true
   });
   const live = (seen.result && seen.result.value) || {};
   const settingsChanged = live.settings !== configKey;
 
-  if (live.version === expected) {
-    if (settingsChanged || consumedAt !== null) {
+  if (live.version === expected && live.healthy) {
+    if (true) { // Also reconcile missing owned DOM/styles after a host remount.
       // Cheap path: no teardown, no re-arm. The payload re-reads the switches on its next tick and
       // the master switch runs a full build when it comes back on.
       await send(ws, 3, "Runtime.evaluate", {
@@ -182,7 +183,7 @@ for (const page of pages) {
   }
 
   // Dispose the previous event-driven stage before crossing versions (including rollback).
-  await send(ws, 18, "Runtime.evaluate", { expression: "window.__kabiStageDispose?.()", returnByValue: true });
+  await send(ws, 18, "Runtime.evaluate", { expression: "window.__kabiStageDispose?.(); delete window.__kabiStage", returnByValue: true });
   await send(ws, 19, "Page.enable", {});
   // Purge every armed registration on this target, not just the one this injector recorded.
   // Registrations live on the page target and outlive the CDP session that added them, so any
@@ -197,10 +198,12 @@ for (const page of pages) {
   const installed = await send(ws, 3, "Page.addScriptToEvaluateOnNewDocument", { source: booted });
   registrations[page.id] = installed.identifier;
 
-  await send(ws, 4, "Runtime.evaluate", { expression: booted, returnByValue: true });
+  const evaluated = await send(ws, 4, "Runtime.evaluate", { expression: booted, returnByValue: true });
+  if (evaluated.exceptionDetails) throw new Error(JSON.stringify(evaluated.exceptionDetails));
   const mark = await send(ws, 5, "Runtime.evaluate", {
     expression: "window.__kabiStage || ''", returnByValue: true
   });
+  if (mark.result?.value !== expected) throw new Error("payload did not boot");
   console.log(JSON.stringify({
     url: page.url, title: page.title, identifier: installed && installed.identifier,
     mark: mark.result && mark.result.value, payload: payloadFrom
@@ -211,3 +214,5 @@ for (const page of pages) {
 try {
   fs.writeFileSync(statePath, JSON.stringify({ version: expected, settings: configKey, registrations, at: new Date().toISOString() }, null, 2));
 } catch {}
+
+clearTimeout(watchdog);

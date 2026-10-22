@@ -8,17 +8,24 @@
 # `on` and `off` are deliberately reversible without a logout and without touching the NetEase app
 # bundle, because `off` has to work even when the thing is misbehaving -- that is the moment you most
 # need to be able to turn it off.
-set -u
+set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT" ]; do
+  LINK_DIR="$(cd -P "$(dirname "$SCRIPT")" && pwd)"
+  SCRIPT="$(readlink "$SCRIPT")"
+  [[ "$SCRIPT" = /* ]] || SCRIPT="$LINK_DIR/$SCRIPT"
+done
+REPO="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 HOME_DIR="${REAPPLE_HOME:-$HOME/.reapple}"
 LABEL="com.reapple.music"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 CONFIG="$HOME_DIR/config.json"
 PAYLOAD="$HOME_DIR/stage.js"
 DISABLED="$HOME_DIR/disabled"
-LOG="${REAPPLE_LOG:-/tmp/reapple.log}"
-NODE="$(command -v node || echo /opt/homebrew/bin/node)"
+LOG="${REAPPLE_LOG:-$HOME_DIR/agent.log}"
+NODE="${REAPPLE_NODE:-$(command -v node || echo /opt/homebrew/bin/node)}"
+if [ -f "$HOME_DIR/node-path" ] && [ ! -x "$NODE" ]; then NODE="$(cat "$HOME_DIR/node-path")"; fi
 PORT="${REAPPLE_PORT:-9333}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
@@ -34,17 +41,22 @@ bootstrap() {
   if [ ! -f "$PAYLOAD" ]; then cp "$REPO/payload/stage.js" "$PAYLOAD"; fi
 }
 
-agent_loaded() { launchctl list 2>/dev/null | grep -q "$LABEL"; }
+agent_loaded() { launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; }
 
 load_agent() {
   bootstrap
-  sed -e "s|__LABEL__|$LABEL|g" \
-      -e "s|__WATCH__|$REPO/agent/watch.sh|g" \
-      "$REPO/agent/$LABEL.plist" >"$PLIST"
-  chmod +x "$REPO/agent/watch.sh"
-  # Unload first so a plist that moved or changed does not leave the old one running as well.
-  launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
-  launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
+  mkdir -p "$(dirname "$PLIST")"
+  "$NODE" "$REPO/agent/make-plist.mjs" "$PLIST" "$REPO/agent/watch.sh" "$NODE" "$HOME_DIR" "${REAPPLE_APP:-/Applications/NeteaseMusic.app}" "$PORT"
+  unload_agent
+  launchctl enable "gui/$UID/$LABEL" 2>/dev/null || true
+  # launchd may still be finishing bootout during a rapid upgrade/off/on.
+  # Bound the race retry; never suggest sudo or hide a permanent permission error.
+  for attempt in 1 2 3 4 5; do
+    if launchctl bootstrap "gui/$UID" "$PLIST" 2>"$HOME_DIR/launchctl.err.log"; then return 0; fi
+    sleep 0.4
+  done
+  cat "$HOME_DIR/launchctl.err.log" >&2
+  die "could not load background agent; see $HOME_DIR/launchctl.err.log"
 }
 
 unload_agent() {
@@ -52,21 +64,7 @@ unload_agent() {
 }
 
 ensure_port() {
-  # NetEase drops its command line on every launch, so the debug port has to be re-asserted. The
-  # watch script does the same thing; this is the synchronous version for when the user just wants it
-  # to work now rather than in twenty seconds.
-  local pid
-  pid="$(pgrep -x NeteaseMusic | head -1 || true)"
-  [ -z "$pid" ] && return 0
-  [[ "$(ps -ww -p "$pid" -o args= || true)" == *"--remote-debugging-port=$PORT"* ]] && return 0
-  bold "restarting NetEase with the debug port"
-  say "  (this happens once; NetEase forgets the flag on every launch)"
-  osascript -e 'tell application "NeteaseMusic" to quit' >/dev/null 2>&1 || true
-  sleep 1.5
-  pgrep -x NeteaseMusic >/dev/null && kill -9 "$(pgrep -x NeteaseMusic | head -1)" 2>/dev/null
-  open -a "${REAPPLE_APP:-/Applications/NeteaseMusic.app}" --args \
-    "--remote-debugging-port=$PORT" "--remote-allow-origins=*"
-  sleep 3
+  REAPPLE_NODE="$NODE" REAPPLE_HOME="$HOME_DIR" REAPPLE_PORT="$PORT" bash "$REPO/agent/watch.sh" --start
 }
 
 payload_version() {
@@ -88,7 +86,7 @@ cmd_config() {
       say ""
       # Print the file with the comment lines stripped so what the user sees is what the machine
       # reads, and the underscore key is explained rather than listed as an unknown switch.
-      node -e '
+      "$NODE" -e '
         const fs=require("fs"),p=process.argv[1],c=JSON.parse(fs.readFileSync(p,"utf8"));
         const notes={
           playPage:"master switch -- off hands the whole page back to NetEase",
@@ -119,7 +117,7 @@ cmd_config() {
       ;;
     *)
       local key="$1" want="${2:-toggle}"
-      node -e '
+      "$NODE" -e '
         const fs=require("fs"),p=process.argv[1],k=process.argv[2],w=process.argv[3];
         let c={}; try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
         if(k.startsWith("_")){console.error("reapple: "+k+" is a comment, not a switch");process.exit(1)}
@@ -145,11 +143,12 @@ cmd_config() {
 case "${1:-status}" in
   on)
     bold "reapple on"
+    if [ "$REPO" != "$HOME_DIR/runtime" ]; then exec bash "$REPO/install.sh"; fi
     bootstrap
     rm -f "$DISABLED"
-    load_agent
+    unload_agent
     ensure_port
-    inject_now
+    load_agent
     say ""
     say "  switches: $CONFIG"
     say "  off with: reapple off"
@@ -162,24 +161,7 @@ case "${1:-status}" in
     # did not ask for. Removing it is the whole of "off"; the port flag survives in the running app
     # until the next manual relaunch, which is harmless and avoids killing the user's playback.
     touch "$DISABLED"
-    # Detach the payload from the page that is up right now, so the switch is immediate rather than
-    # "effective after the next reload".
-    if [ -x "$NODE" ] && curl -sf -m 1 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1; then
-      "$NODE" -e '
-        const port=process.argv[1];
-        (async()=>{
-          const t=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-          for(const p of t.filter(x=>x.type==="page"&&x.webSocketDebuggerUrl)){
-            const ws=new WebSocket(p.webSocketDebuggerUrl);
-            await new Promise(r=>ws.addEventListener("open",r,{once:true}));
-            ws.send(JSON.stringify({id:1,method:"Runtime.evaluate",
-              params:{expression:"window.__kabiStageDispose && window.__kabiStageDispose()",returnByValue:true}}));
-            await new Promise(r=>setTimeout(r,400));
-            ws.close();
-          }
-        })().catch(()=>{});
-      ' "$PORT" 2>/dev/null || true
-    fi
+    REAPPLE_HOME="$HOME_DIR" REAPPLE_PORT="$PORT" "$NODE" "$REPO/agent/detach.mjs"
     say "  detached; NetEase left running"
     ;;
 
@@ -196,10 +178,10 @@ case "${1:-status}" in
     fi
     say ""
     if [ -f "$CONFIG" ]; then
-      node -e '
+      "$NODE" -e '
         const fs=require("fs"),c=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
         for(const k of Object.keys(c)) if(!k.startsWith("_"))
-          process.stdout.write("  "+(c[k]?"on ":"off")+"  "+k+"\n");
+          process.stdout.write("  "+(typeof c[k]==="string"?c[k]:c[k]?"on ":"off")+"  "+k+"\n");
       ' "$CONFIG"
     fi
     say ""
@@ -224,24 +206,17 @@ case "${1:-status}" in
   uninstall)
     bold "reapple uninstall"
     unload_agent
+    mkdir -p "$HOME_DIR"; touch "$DISABLED"
+    REAPPLE_HOME="$HOME_DIR" REAPPLE_PORT="$PORT" "$NODE" "$REPO/agent/detach.mjs"
     rm -f "$PLIST"
-    rm -rf "$HOME_DIR"
-    if curl -sf -m 1 "http://127.0.0.1:$PORT/json/version" >/dev/null 2>&1 && [ -x "$NODE" ]; then
-      "$NODE" -e '
-        const port=process.argv[1];
-        (async()=>{
-          const t=await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-          for(const p of t.filter(x=>x.type==="page"&&x.webSocketDebuggerUrl)){
-            const ws=new WebSocket(p.webSocketDebuggerUrl);
-            await new Promise(r=>ws.addEventListener("open",r,{once:true}));
-            ws.send(JSON.stringify({id:1,method:"Runtime.evaluate",
-              params:{expression:"window.__kabiStageDispose && window.__kabiStageDispose()",returnByValue:true}}));
-            await new Promise(r=>setTimeout(r,400));
-            ws.close();
-          }
-        })().catch(()=>{});
-      ' "$PORT" 2>/dev/null || true
+    # Remove only our own launcher; never overwrite/remove a pre-existing command.
+    for link in "$HOME/.local/bin/reapple"; do
+      if [ -L "$link" ] && [ "$(readlink "$link")" = "$HOME_DIR/runtime/bin/reapple" ]; then rm "$link"; fi
+    done
+    if [ -f "$HOME/.zprofile" ]; then
+      "$NODE" -e 'const fs=require("fs"),p=process.argv[1];fs.writeFileSync(p,fs.readFileSync(p,"utf8").split("\n").filter(s=>!s.endsWith(" # Reapple Music CLI")).join("\n"));' "$HOME/.zprofile"
     fi
+    rm -rf "$HOME_DIR"
     say ""
     say "  removed. NetEase is untouched and still running."
     say "  the --remote-debugging-port flag stays until you next quit and reopen it by hand."

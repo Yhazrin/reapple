@@ -58,7 +58,12 @@ Full measurement notes are in [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md).
 
 ## Install
 
-Requires macOS, NetEase Cloud Music in `/Applications`, and Node.
+Requires macOS, NetEase Cloud Music in `/Applications`, and **Node.js 22 or newer** (built-in WebSocket).
+
+For a downloaded ZIP: extract it and double-click **安装 Reapple.command**. The package also
+contains **启动 Reapple.command**, **关闭 Reapple.command**, and **卸载 Reapple.command**.
+They do not depend on terminal PATH. Review the scripts before running; the ZIP is not a signed
+or notarized macOS app.
 
 ```sh
 git clone https://github.com/Yhazrin/reapple.git
@@ -66,12 +71,28 @@ cd reapple
 ./install.sh
 ```
 
-`install.sh` puts the payload and settings in `~/.reapple/`, installs a launchd agent, and
-attaches. NetEase is restarted once, because the transport is a Chrome DevTools Protocol
-endpoint and NetEase forgets its command line on every launch — there is no way around that
-one, so it is done for you and only once.
+`install.sh` copies the complete runtime, payload and settings into `~/.reapple/`.
+The launchd agent points **only to that installed runtime**, not Desktop, Downloads or
+an extracted repository. You can delete the downloaded folder after installation.
+Your existing settings survive upgrades, but the payload and agent are refreshed.
 
-Nothing is written inside `NeteaseMusic.app`. Uninstall is `reapple uninstall`.
+When you quit NetEase it stays closed. When you open it normally, the agent checks
+within about two seconds; if the debug flag was lost it gracefully restarts NetEase
+with the local debug port and reinjects when the app is ready. This may cause a brief
+extra launch; injection is **not instantaneous**. A direct **启动 Reapple.command**
+starts it with the needed flags. A hung/refusing host is never force-killed.
+
+Nothing is written inside `NeteaseMusic.app`. Uninstall using the double-click entry,
+`reapple uninstall` (new terminal), or this PATH-independent fallback:
+
+```sh
+bash "$HOME/.reapple/runtime/bin/reapple" uninstall
+```
+
+`reapple off` stops automatic recovery and detaches; `reapple on` enables it again.
+Native Settings → Reapple Music → master switch disables the replica but leaves its
+settings manager available. The CLI off/uninstall also disarms the known reload script.
+Details and limitations: [startup recovery](docs/STARTUP-RECOVERY.md).
 
 ## Switches
 
@@ -95,7 +116,7 @@ reapple config                 # back to normal
 | `lyrics` | on | the synced lyric list and its scroll algorithm |
 | `footer` | on | the two liquid-glass buttons, bottom right |
 | `queue` | on | the Up Next sheet the right-hand button opens |
-| `miniBar` | on | reserved; not built yet |
+| `miniBar` | on | the floating playback capsule |
 
 Settings live in `~/.reapple/config.json`. A key you delete falls back to its default, and
 an unknown key is ignored rather than fatal, so the file is safe to trim.

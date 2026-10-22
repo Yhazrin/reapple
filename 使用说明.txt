@@ -1,0 +1,19 @@
+Reapple Music 0.1.2 · stage97
+
+先安装 Node.js 22 或更新版本：https://nodejs.org
+网易云音乐需安装在 /Applications/NeteaseMusic.app。
+
+1. 解压 ZIP 后，双击「安装 Reapple.command」。
+2. 安装成功后可以删除下载文件夹，后台使用 ~/.reapple/runtime 的独立副本。
+3. 以后正常打开网易云，数秒内自动恢复；若网易云未带调试参数，会温和重开一次。
+4. 双击「启动 Reapple.command」可直接带参数启动。
+5. 双击「关闭 Reapple.command」关闭自动注入，双击「卸载 Reapple.command」彻底卸载插件。
+6. 网易云 → 设置 → Reapple Music 中可管理组件和材质。
+
+终端新窗口可用 reapple on / off / status / uninstall。
+找不到 reapple 时，直接执行：
+bash "$HOME/.reapple/runtime/bin/reapple" uninstall
+
+本包是可审阅的安装脚本，不是已签名/公证的 .app。
+不修改网易云程序包；正常重开可能发生短暂额外启动，不保证零闪烁或立即注入。
+已在 macOS 网易云3.1.12验证；其他版本的界面结构可能不同，未知结构会退回原生栏。
