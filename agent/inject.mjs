@@ -52,7 +52,7 @@ let config = readConfig();
 
 // Normalise before hashing so that key order and whitespace -- the two things a hand-edited file
 // changes most -- do not read as a settings change and trigger a pointless reload.
-const allowedKeys = new Set(["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear", "miniBar"]);
+const allowedKeys = new Set(["playPage", "backdrop", "artwork", "songInfo", "playbackBar", "lyrics", "footer", "queue", "lyricHoverClear", "lyricScrollClear", "qualityCompact", "miniBar", "miniBarMaterial", "sidebarRounded", "coverRounded", "albumRounded", "searchFilled", "appleSongList", "showTrackMV", "showTrackQuality", "showTrackNumber", "showTrackVIP"]);
 const hashConfig = value => crypto.createHash("sha256")
   .update(JSON.stringify(value, Object.keys(value).sort())).digest("hex").slice(0, 16);
 let configKey = hashConfig(config);

@@ -24,8 +24,11 @@ CONFIG="$HOME_DIR/config.json"
 PAYLOAD="$HOME_DIR/stage.js"
 DISABLED="$HOME_DIR/disabled"
 LOG="${REAPPLE_LOG:-$HOME_DIR/agent.log}"
-NODE="${REAPPLE_NODE:-$(command -v node || echo /opt/homebrew/bin/node)}"
-if [ -f "$HOME_DIR/node-path" ] && [ ! -x "$NODE" ]; then NODE="$(cat "$HOME_DIR/node-path")"; fi
+NODE="${REAPPLE_NODE:-}"
+# Prefer the installed runtime, never an unrelated Homebrew version.
+if [ -z "$NODE" ] && [ -f "$HOME_DIR/node-path" ]; then NODE="$(cat "$HOME_DIR/node-path")"; fi
+if [ -z "$NODE" ] && [ -x "$REPO/vendor/node/node" ]; then NODE="$REPO/vendor/node/node"; fi
+[ -n "$NODE" ] || NODE="$(command -v node || true)"
 PORT="${REAPPLE_PORT:-9333}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
@@ -100,7 +103,16 @@ cmd_config() {
           lyricHoverClear:"unblur the hovered lyric line",
           lyricScrollClear:"unblur lyrics during manual browsing",
           miniBar:"native-state floating playback capsule",
-          miniBarMaterial:"frosted / glass (web approximation) / solid"
+          miniBarMaterial:"frosted / glass (web approximation) / solid",
+          sidebarRounded:"rounded sidebar items",
+          coverRounded:"rounded square / rectangular covers",
+          albumRounded:"album / playlist artwork and pill buttons",
+          searchFilled:"borderless filled search with continuous focus motion",
+          appleSongList:"album below title and separate artist column",
+          showTrackMV:"show native MV badge",
+          showTrackQuality:"show native audio quality badge",
+          showTrackNumber:"show track index column",
+          showTrackVIP:"show native VIP membership badge"
         };
         for(const k of Object.keys(notes)){
           if(!k.startsWith("_")) say_note(k,c[k],notes[k]);
@@ -121,7 +133,7 @@ cmd_config() {
         const fs=require("fs"),p=process.argv[1],k=process.argv[2],w=process.argv[3];
         let c={}; try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}
         if(k.startsWith("_")){console.error("reapple: "+k+" is a comment, not a switch");process.exit(1)}
-        const known=["playPage","backdrop","artwork","songInfo","playbackBar","lyrics","footer","queue","lyricHoverClear","lyricScrollClear","miniBar","miniBarMaterial"];
+        const known=["playPage","backdrop","artwork","songInfo","playbackBar","lyrics","footer","queue","lyricHoverClear","lyricScrollClear","qualityCompact","miniBar","miniBarMaterial","sidebarRounded","coverRounded","albumRounded", "searchFilled", "appleSongList", "showTrackMV", "showTrackQuality", "showTrackNumber", "showTrackVIP"];
         if(!known.includes(k)){console.error("reapple: unknown switch "+k+"\n  known: "+known.join(", "));process.exit(1)}
         const before=c[k];
         if(k==="miniBarMaterial") {
@@ -135,19 +147,31 @@ cmd_config() {
         fs.writeFileSync(p, JSON.stringify(c,null,2)+"\n");
         console.log("  "+k+": "+String(before)+" -> "+String(c[k]));
       ' "$CONFIG" "$key" "$want" || exit 1
-      if agent_loaded; then inject_now >/dev/null; say "  applied"; fi
+      if agent_loaded || [ -f "$HOME_DIR/managed-session" ]; then inject_now >/dev/null; say "  applied"; fi
       ;;
   esac
 }
 
 case "${1:-status}" in
+  managed-session)
+    bootstrap
+    unload_agent
+    rm -f "$PLIST" "$DISABLED"
+    touch "$HOME_DIR/managed-session"
+    say "已启用本次会话；等待网易云，不主动启动或重启。"
+    ;;
+  open)
+    ensure_port
+    ;;
+  restart-host)
+    REAPPLE_NODE="$NODE" REAPPLE_HOME="$HOME_DIR" REAPPLE_PORT="$PORT" bash "$REPO/agent/watch.sh" --restart
+    ;;
   on)
     bold "reapple on"
     if [ "$REPO" != "$HOME_DIR/runtime" ]; then exec bash "$REPO/install.sh"; fi
     bootstrap
     rm -f "$DISABLED"
     unload_agent
-    ensure_port
     load_agent
     say ""
     say "  switches: $CONFIG"
@@ -161,6 +185,7 @@ case "${1:-status}" in
     # did not ask for. Removing it is the whole of "off"; the port flag survives in the running app
     # until the next manual relaunch, which is harmless and avoids killing the user's playback.
     touch "$DISABLED"
+    rm -f "$HOME_DIR/managed-session" "$HOME_DIR/pending-restart"
     REAPPLE_HOME="$HOME_DIR" REAPPLE_PORT="$PORT" "$NODE" "$REPO/agent/detach.mjs"
     say "  detached; NetEase left running"
     ;;

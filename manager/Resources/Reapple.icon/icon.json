@@ -1,0 +1,41 @@
+{
+  "color-space-for-untagged-svg-colors" : "display-p3",
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:1.00000,0.05500,0.21000,1.00000"
+  },
+  "groups" : [
+    {
+      "blur-material" : 0.12,
+      "layers" : [
+        {
+          "glass" : false,
+          "image-name" : "01-music-spiral.svg",
+          "name" : "Continuous music spiral",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -28.4453125,
+              24.04392068358129
+            ]
+          }
+        }
+      ],
+      "name" : "Music + spiral · Liquid Glass",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.32
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.18
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
