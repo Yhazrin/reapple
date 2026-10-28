@@ -3,7 +3,7 @@
   // Single source of truth for the version. Every guard below reads STAGE_VERSION, so a
   // release bump can never leave one site (a negated compare, a cached marker) behind and
   // silently disable the whole stage.
-  var STAGE_VERSION = "133";
+  var STAGE_VERSION = "134";
   // Page.addScriptToEvaluateOnNewDocument can run before <html> exists. Do not set the
   // installed marker and then crash: attach in the parser's first document mutation,
   // before its first paint. The previous bootstrap is always disposable.
@@ -2673,7 +2673,11 @@
         // Reconstructed per-line lag; exact native delay formula is still under study.
         var delay = visible ? Math.min(180, distance * 28) : 0;
         node.style.willChange = visible ? "transform" : "auto";
-        return { node: node, initial: offset, offset: offset, delay: delay };
+        // Foreground responds immediately with a shorter response, while the
+        // upcoming rows retain the previous spring and stagger. This is a tuned
+        // reconstruction value, not an extracted Apple constant.
+        return { node: node, initial: offset, offset: offset, delay: delay,
+          rate: focus >= 0 && index <= focus ? 1.65 : 1 };
       });
       old.forEach(function (r) { if (rows.indexOf(r.node) < 0) { r.node.style.removeProperty("translate"); r.node.style.removeProperty("will-change"); } });
     }
@@ -2735,7 +2739,9 @@
           seen = list.scrollTop;
           rowRuns.forEach(function (r) {
             var t = Math.max(0, elapsed - r.delay / 1000);
-            var response = LYRIC_SPRING.at(t, run.v0).x;
+            // Scale time, not just delay: zero-delay with the old slow spring still
+            // felt sluggish. Divide input velocity to preserve its real-time units.
+            var response = LYRIC_SPRING.at(t * r.rate, run.v0 / r.rate).x;
             r.offset = r.initial + actualTravel - (run.travel + r.initial) * response;
             r.node.style.translate = "0 " + r.offset.toFixed(3) + "px";
           });
