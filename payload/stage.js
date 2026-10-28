@@ -3,7 +3,7 @@
   // Single source of truth for the version. Every guard below reads STAGE_VERSION, so a
   // release bump can never leave one site (a negated compare, a cached marker) behind and
   // silently disable the whole stage.
-  var STAGE_VERSION = "122";
+  var STAGE_VERSION = "133";
   // Page.addScriptToEvaluateOnNewDocument can run before <html> exists. Do not set the
   // installed marker and then crash: attach in the parser's first document mutation,
   // before its first paint. The previous bootstrap is always disposable.
@@ -997,9 +997,11 @@
       bg = document.createElement("div");
       bg.id = "kabi-bg";
       bg.innerHTML = meshMarkup();
+      installBackdropDither(bg);
       root.insertBefore(bg, root.firstChild);
       return bg;
     }
+    installBackdropDither(bg);
     // Validate the mesh instead of trusting the id. An older build armed through
     // addScriptToEvaluateOnNewDocument re-fires whenever NetEase creates a document and runs
     // after this one, rebuilding #kabi-bg out of its own markup -- "<div class='zoom'><img></div>"
@@ -1027,6 +1029,27 @@
       }
     }
     return bg;
+  }
+
+  // Web-output adaptation, not a claim about Apple's private framebuffer format.
+  // A stationary, one-device-pixel dither is composited AFTER mesh scaling/rotation.
+  // Generate once: no animation, no full-frame JS pixel loop on each display frame.
+  function installBackdropDither(bg) {
+    if (bg.querySelector(".reapple-backdrop-dither")) return;
+    var tile = document.createElement("canvas"); tile.width = tile.height = 128;
+    var ctx = tile.getContext("2d"), pixels = ctx.createImageData(128, 128);
+    var seed = 730201;
+    for (var i = 0; i < pixels.data.length; i += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      var value = (seed >>> 24); // neutral, zero-mean around mid-grey
+      pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = value;
+      pixels.data[i + 3] = 255;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    var layer = document.createElement("div"); layer.className = "reapple-backdrop-dither";
+    var dpr = window.devicePixelRatio || 1;
+    layer.style.cssText = "position:absolute;inset:0;z-index:2;pointer-events:none;opacity:.016;mix-blend-mode:soft-light;background-repeat:repeat;background-size:" + (128 / dpr) + "px " + (128 / dpr) + "px;background-image:url(" + tile.toDataURL() + ")";
+    bg.appendChild(layer);
   }
 
   function sampleColor(img) {
@@ -1071,8 +1094,8 @@
   // Pass order (pinch grade inside, rotation grade outside) is the one that reproduces the
   // reference frame's blue-channel signature; the two orders differ measurably there.
   var BACKDROP = {
-    size: 256,
-    blurPx: 16,
+    size: 1024,
+    blurPx: 64,
     whiteScrim: 0.1,
     blackScrim: 0.5,
     saturation: 2.4,
@@ -2630,6 +2653,30 @@
     var frame = 0;
     var run = null;                       // {from, travel, at, v0}
     var seen = list.scrollTop;
+    var rowRuns = [];
+    function clearRows() {
+      rowRuns.forEach(function (r) { r.node.style.removeProperty("translate"); r.node.style.removeProperty("will-change"); });
+      rowRuns = [];
+    }
+    function captureRows(travel, at) {
+      var rows = Array.prototype.slice.call(list.querySelectorAll("li.line"));
+      var focus = rows.indexOf(list.querySelector("li.current"));
+      var box = list.getBoundingClientRect();
+      var old = rowRuns;
+      rowRuns = rows.map(function (node, index) {
+        var prior = old.find(function (r) { return r.node === node; });
+        var rect = node.getBoundingClientRect();
+        // Keep only nearby rows composited; offscreen rows are never promoted.
+        var visible = rect.bottom > box.top - 200 && rect.top < box.bottom + 200;
+        var offset = prior ? prior.offset : 0;
+        var distance = Math.max(0, index - Math.max(0, focus));
+        // Reconstructed per-line lag; exact native delay formula is still under study.
+        var delay = visible ? Math.min(180, distance * 28) : 0;
+        node.style.willChange = visible ? "transform" : "auto";
+        return { node: node, initial: offset, offset: offset, delay: delay };
+      });
+      old.forEach(function (r) { if (rows.indexOf(r.node) < 0) { r.node.style.removeProperty("translate"); r.node.style.removeProperty("will-change"); } });
+    }
     var nativeScrollTo = list.scrollTo;
     var hadOwnScrollTo = Object.prototype.hasOwnProperty.call(list, 'scrollTo');
     var focusTimer = 0;
@@ -2642,15 +2689,17 @@
       if (!current || !list.clientHeight) return;
       var row = current.getBoundingClientRect(), box = list.getBoundingClientRect();
       var target = Math.max(0, Math.min(list.scrollHeight - list.clientHeight,
-        list.scrollTop + row.top - box.top - list.clientTop - list.clientHeight * .35));
+        list.scrollTop + row.top - box.top - (parseFloat(current.style.translate.split(" ").pop()) || 0) - list.clientTop - list.clientHeight * .35));
       if (Math.abs(target - list.scrollTop) > 1) settle(target);
     }
     list._reappleFollowCurrent = followCurrent;
 
     function settle(to) {
+      to = Math.max(0, Math.min(list.scrollHeight - list.clientHeight, to));
       var from = list.scrollTop;
       var travel = to - from;
       if (reducedMotion.matches || !travel) {
+        clearRows();
         run = null;
         list.scrollTop = to;
         seen = list.scrollTop;
@@ -2663,6 +2712,7 @@
         v0 = (run.travel * s.v) / travel;
       }
       run = { from: from, travel: travel, at: performance.now(), v0: v0 };
+      captureRows(travel, run.at);
       seen = from;
       if (!frame) frame = requestAnimationFrame(renderScroll);
     }
@@ -2672,20 +2722,30 @@
       if (disposed) { run = null; return; }
       var now = performance.now();
       if (run) {
-        if (now < manualUntil) { run = null; clearTimeout(focusTimer); focusTimer = setTimeout(followCurrent, manualUntil - now + 20); }             // the user grabbed the list
+        if (now < manualUntil) { clearRows(); run = null; clearTimeout(focusTimer); focusTimer = setTimeout(followCurrent, manualUntil - now + 20); }             // the user grabbed the list
         else {
-          var s = LYRIC_SPRING.at((now - run.at) / 1000, run.v0);
-          list.scrollTop = run.from + run.travel * s.x;
-          seen = list.scrollTop;
-          // Done when both the leftover distance and the leftover speed are sub-pixel. The
-          // residual then snaps to the host's own target, which is what it would have reached.
-          if (Math.abs(run.travel * (1 - s.x)) < 0.25 && Math.abs(run.travel * s.v) < 2) {
-            list.scrollTop = run.from + run.travel;
-            seen = list.scrollTop;
-            run = null;
-            return;
+          if (reducedMotion.matches) {
+            list.scrollTop = run.from + run.travel; seen = list.scrollTop;
+            clearRows(); run = null; return;
           }
-          if (!LYRIC_SPRING.settle((now - run.at) / 1000)) frame = requestAnimationFrame(renderScroll);
+          var elapsed = (now - run.at) / 1000;
+          var s = LYRIC_SPRING.at(elapsed, run.v0);
+          list.scrollTop = run.from + run.travel * s.x;
+          var actualTravel = list.scrollTop - run.from;
+          seen = list.scrollTop;
+          rowRuns.forEach(function (r) {
+            var t = Math.max(0, elapsed - r.delay / 1000);
+            var response = LYRIC_SPRING.at(t, run.v0).x;
+            r.offset = r.initial + actualTravel - (run.travel + r.initial) * response;
+            r.node.style.translate = "0 " + r.offset.toFixed(3) + "px";
+          });
+          // Include the final row's lag. Always commit the exact target, including
+          // timeout exit; the former code could leave an unfinished run at 1.2s.
+          if (elapsed > 1.5) {
+            list.scrollTop = run.from + run.travel; seen = list.scrollTop;
+            clearRows(); run = null; return;
+          }
+          frame = requestAnimationFrame(renderScroll);
           return;
         }
       }
@@ -2712,8 +2772,8 @@
       clearTimeout(browsingTimer); syncLyricBrowsing(list);
       browsingTimer = setTimeout(function () { list._reappleManualUntil = 0; if (!disposed) syncLyricBrowsing(list); }, 1500);
     }
-    var release = function (event) { manualUntil = performance.now() + 1500; run = null; clearTimeout(focusTimer); focusTimer = setTimeout(followCurrent, 1520); if (event.type !== "pointerdown") beginBrowsing(); };
-    var keyboardBrowse = function (event) { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].indexOf(event.key) >= 0) { manualUntil = performance.now() + 1500; run = null; clearTimeout(focusTimer); focusTimer = setTimeout(followCurrent, 1520); beginBrowsing(); } };
+    var release = function (event) { manualUntil = performance.now() + 1500; clearRows(); run = null; clearTimeout(focusTimer); focusTimer = setTimeout(followCurrent, 1520); if (event.type !== "pointerdown") beginBrowsing(); };
+    var keyboardBrowse = function (event) { if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].indexOf(event.key) >= 0) { manualUntil = performance.now() + 1500; clearRows(); run = null; clearTimeout(focusTimer); focusTimer = setTimeout(followCurrent, 1520); beginBrowsing(); } };
     list.addEventListener("keydown", keyboardBrowse);
     ['wheel', 'touchstart', 'pointerdown'].forEach(function (name) { list.addEventListener(name, release, { passive: true }); });
 
@@ -2725,6 +2785,7 @@
 
     return function () {
       cancelAnimationFrame(frame);
+      clearRows();
       clearTimeout(browsingTimer); clearTimeout(focusTimer); delete list._reappleFollowCurrent; list._reappleManualUntil = 0;
       list.classList.remove("reapple-lyric-browsing", "reapple-lyric-hover");
       list.removeEventListener("keydown", keyboardBrowse);
